@@ -1,0 +1,4 @@
+SATPAMBOT_PHASH_DB_V1
+```json
+{"phash":[]}
+```
