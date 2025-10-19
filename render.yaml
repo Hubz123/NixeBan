@@ -1,5 +1,6 @@
+
 services:
-  - type: worker
+  - type: web
     name: nixe-phishbot
     env: python
     plan: free
@@ -23,6 +24,12 @@ services:
         sync: false
       - key: PHISH_DB_CHANNEL_ID
         sync: false
+      - key: PHISH_DB_CHANNEL_NAME
+        value: 'log-botphising'
+      - key: PHISH_DB_THREAD_NAME
+        value: 'imagephising'
+      - key: AUTO_CREATE_DB_THREAD
+        value: '1'
       - key: PHISH_WHITELIST_ROLES
         sync: false
       - key: DELETE_MESSAGE_DAYS
@@ -41,9 +48,9 @@ services:
         value: '1'
       - key: LINK_AUTOBAN_ON_MATCH
         value: '0'
-      - key: LINK_DB_CHANNEL_ID
-        sync: false
-      - key: LINK_BLACKLIST
-        value: 'discord-gift.com, disocrdapp.com, discordnitro.*free, steamcommnunity.com'
-      - key: LINK_REGEXES
-        value: '(free|claim).*(nitro|gift),(airdrop|giveaway).*(wallet|seed)'
+      - key: LINK_DB_CHANNEL_NAME
+        value: 'log-botphising'
+      - key: STRICT_HEALTH
+        value: '0'
+      - key: HEALTH_READY_AFTER_SECONDS
+        value: '30'
