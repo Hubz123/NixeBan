@@ -1,19 +1,14 @@
+import sys, pathlib
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-"""
-Comprehensive local "smoke" for Nixe.
-- Validates config/env defaults
-- Imports cogs & helpers
-- Static checks for thresholds & guards
-- Ensures templates exist
-Exit 0 on success, 1 on failure.
-"""
-import sys, os, importlib, inspect
+# --- fixed: import Path for template checks ---
+from pathlib import Path
+import importlib
 
 FAILS = []
 
 def fail(msg):
-    print("[FAIL]", msg)
-    FAILS.append(msg)
+    print("[FAIL]", msg); FAILS.append(msg)
 
 def ok(msg):
     print("[OK]", msg)
@@ -29,7 +24,6 @@ def check_import(mod):
         return None
 
 def main():
-    # Basic imports
     mods = [
         "nixe.config",
         "nixe.helpers.safeawait",
@@ -39,7 +33,6 @@ def main():
     ]
     loaded = [check_import(m) for m in mods]
 
-    # Config sanity
     try:
         from nixe.config import load
         cfg = load()
@@ -51,14 +44,15 @@ def main():
     except Exception as e:
         fail(f"config sanity: {e}")
 
-    # Template existence
     for p in ["templates/pinned_phash_db_template.txt", "templates/pinned_link_blacklist_template.txt"]:
-        if not os.path.exists(p):
-            fail(f"missing template: {p}")
-        else:
-            ok(f"template: {p}")
+        try:
+            if Path(p).exists():
+                ok(f"template: {p}")
+            else:
+                fail(f"missing template: {p}")
+        except Exception as e:
+            fail(f"missing template: {p}: {e}")
 
-    # Module attributes quick peek
     try:
         img = importlib.import_module("nixe.cogs.image_phish_guard")
         assert hasattr(img, "ImagePhishGuard"), "ImagePhishGuard missing"
@@ -74,10 +68,8 @@ def main():
         fail(f"LinkPhishGuard check: {e}")
 
     if FAILS:
-        print(f"SMOKE_ALL: {len(FAILS)} failures")
-        sys.exit(1)
+        print(f"SMOKE_ALL: {len(FAILS)} failures"); raise SystemExit(1)
     print("SMOKE_ALL: OK")
-    return 0
 
 if __name__ == "__main__":
     main()

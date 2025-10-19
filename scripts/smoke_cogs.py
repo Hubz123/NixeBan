@@ -1,4 +1,6 @@
-\
+import sys, pathlib
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
 # Minimal smoke: ensure cogs importable as extensions (no side-effects at import)
 from importlib import util
 
