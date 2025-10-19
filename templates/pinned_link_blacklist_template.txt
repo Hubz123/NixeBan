@@ -1,0 +1,12 @@
+# PINNED: Link blacklist & regex for Nixe
+# You can add plain hostnames and regex lines.
+# Regex line format: regex: <pattern>
+
+# Domains
+discord-gift.com
+disocrdapp.com
+steamcommnunity.com
+
+# Regex (case-insensitive)
+regex: (free|claim).*(nitro|gift)
+regex: (airdrop|giveaway).*(wallet|seed)

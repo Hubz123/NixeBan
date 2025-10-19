@@ -1,0 +1,49 @@
+services:
+  - type: worker
+    name: nixe-phishbot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt && python scripts/smoke_cogs.py && python scripts/smoke_all.py
+    startCommand: python main.py
+    autoDeploy: false
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: LOG_LEVEL
+        value: INFO
+      - key: MOD_LOG_CHANNEL_ID
+        sync: false
+      - key: ENABLE_PHISH_AUTOBAN
+        value: '1'
+      - key: PHASH_DISTANCE_STRICT
+        value: '4'
+      - key: PHASH_DISTANCE_LENIENT
+        value: '6'
+      - key: PHISH_DB_THREAD_ID
+        sync: false
+      - key: PHISH_DB_CHANNEL_ID
+        sync: false
+      - key: PHISH_WHITELIST_ROLES
+        sync: false
+      - key: DELETE_MESSAGE_DAYS
+        value: '1'
+      - key: WARMUP_SECONDS
+        value: '120'
+      - key: BAN_COOLDOWN_SECONDS
+        value: '20'
+      - key: BAN_CEILING_PER_10MIN
+        value: '5'
+      - key: QUARANTINE_MINUTES
+        value: '60'
+      - key: BAN_ONLY_NEWER_THAN_DAYS
+        value: '14'
+      - key: ENABLE_LINK_AUTOMOD
+        value: '1'
+      - key: LINK_AUTOBAN_ON_MATCH
+        value: '0'
+      - key: LINK_DB_CHANNEL_ID
+        sync: false
+      - key: LINK_BLACKLIST
+        value: 'discord-gift.com, disocrdapp.com, discordnitro.*free, steamcommnunity.com'
+      - key: LINK_REGEXES
+        value: '(free|claim).*(nitro|gift),(airdrop|giveaway).*(wallet|seed)'

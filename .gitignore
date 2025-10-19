@@ -1,0 +1,21 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual env
+.venv/
+venv/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Logs & artifacts
+*.log
+*.zip
+
+# Secrets
+.env
+.env.*
+data/uploads/

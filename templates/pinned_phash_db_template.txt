@@ -1,0 +1,9 @@
+# PINNED: pHash DB for Nixe
+# Format:
+# - Hex 16 chars per line (example below)
+# - Or lines like: phash: 0123abcd4567ef89
+# Tips:
+# - Taruh pHash hasil capture kasus real (bukan thumbnail/random).
+
+0123456789abcdef
+phash: 89abcdef01234567
