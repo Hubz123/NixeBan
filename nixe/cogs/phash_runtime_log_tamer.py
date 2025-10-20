@@ -18,7 +18,7 @@ class PhashRuntimeLogTamer(commands.Cog):
     async def on_ready(self):
         # Target umum
         candidates = [
-            "satpambot.bot.modules.discord_bot.cogs.anti_image_phash_runtime",
+            "nixe.cogs.anti_image_phash_runtime",
             "anti_image_phash_runtime",
             "phash-runtime",
             "phash",

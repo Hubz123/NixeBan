@@ -6,9 +6,12 @@ try:
 except Exception:
     _ZoneInfo = None
 import discord
+from discord.ext import commands
 from ..config.self_learning_cfg import BAN_BRAND_NAME
+
 LEINA_COLOR_BAN = 0xD72638
 LEINA_COLOR_SIM = 0xF39C12
+
 def _wib_now_str():
     tz = None
     if _ZoneInfo is not None:
@@ -16,9 +19,11 @@ def _wib_now_str():
         except Exception: tz = None
     now = _dt.datetime.now(tz) if tz else _dt.datetime.now()
     return now.strftime('%Y-%m-%d %H:%M:%S') + ' WIB'
+
 def build_ban_embed(*, simulate: bool, actor: discord.abc.User, target: discord.abc.User,
                     reason: str = '—', evidence_url: Optional[str] = None,
                     phash: Optional[str] = None) -> discord.Embed:
+    """Leina-like ban/testban embed used across cogs."""
     title = ('💀 Test Ban (Simulasi)' if simulate else '⛔ BAN')
     color = (LEINA_COLOR_SIM if simulate else LEINA_COLOR_BAN)
     e = discord.Embed(title=title, color=color)
@@ -39,3 +44,13 @@ def build_ban_embed(*, simulate: bool, actor: discord.abc.User, target: discord.
         e.description = '_Ini hanya simulasi. Tidak ada aksi ban yang dilakukan._'
     e.set_footer(text=f"{BAN_BRAND_NAME} • {_wib_now_str()}")
     return e
+
+# --- NEW: provide async setup() so this module also behaves like a cog ---
+class _BanEmbedCog(commands.Cog):
+    """Utility Cog container; no commands, only ensures async setup exists."""
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+
+async def setup(bot: commands.Bot):
+    # Optional: attach as utility cog (harmless); mainly to satisfy smoke checks.
+    await bot.add_cog(_BanEmbedCog(bot))

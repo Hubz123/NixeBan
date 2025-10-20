@@ -132,3 +132,7 @@ class NixePhashMatchGuard(commands.Cog):
         e = build_ban_embed(simulate=True, actor=moderator, target=message.author, reason="Match pHash di imagephising", phash=h)
         await logch.send(embed=e, allowed_mentions=discord.AllowedMentions.none())
         # Autoban remains OFF unless enabled by ENV (not implemented here to keep safe)
+
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(NixePhashMatchGuard(bot))

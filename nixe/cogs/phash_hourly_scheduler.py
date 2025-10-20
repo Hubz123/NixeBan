@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio, logging, discord
 from discord.ext import commands, tasks
-from satpambot.bot.modules.discord_bot.config.self_learning_cfg import (
+from nixe.config.self_learning_cfg import (
     LOG_CHANNEL_ID, PHASH_LOG_SCAN_LIMIT, PHASH_FIRST_DELAY_SECONDS, PHASH_INTERVAL_SECONDS
 )
 
@@ -46,7 +46,7 @@ class PhashHourlyScheduler(commands.Cog):
                 log.exception("[phash_hourly] guard reconcile failed, fallback: %s", e)
 
         try:
-            from satpambot.ml.phash_reconcile import collect_phash_from_log
+            from nixe.ml.phash_reconcile import collect_phash_from_log
             hashes = await collect_phash_from_log(ch, limit_msgs=PHASH_LOG_SCAN_LIMIT)  # type: ignore
             n = 0
             try: n = len(hashes)

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from discord.ext import commands
-from satpambot.bot.modules.discord_bot.config.self_learning_cfg import PHASH_LOG_SCAN_LIMIT
+from nixe.config.self_learning_cfg import PHASH_LOG_SCAN_LIMIT
 
 log = logging.getLogger(__name__)
 
@@ -12,7 +12,7 @@ class PatchCollectPhashWrapper(commands.Cog):
 
     async def cog_load(self):
         try:
-            import satpambot.ml.phash_reconcile as M
+            import nixe.ml.phash_reconcile as M
         except Exception as e:
             log.warning("[patch_collect_phash] cannot import phash_reconcile: %s", e); return
         if not hasattr(M, "collect_phash_from_log"):

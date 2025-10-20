@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-# satpambot/bot/modules/discord_bot/cogs/phash_auto_ban.py
+# nixe/bot/modules/discord_bot/cogs/phash_auto_ban.py
 
 import asyncio
 from collections import OrderedDict
@@ -99,7 +99,7 @@ class PhashAutoBan(commands.Cog):
         em.add_field(name="Reason", value=reason or "—", inline=False)
 
         em.description = "_Ini hasil deteksi otomatis. Konten sumber akan dibersihkan otomatis._"
-        em.set_footer(text=f"SatpamBot • {datetime.now(WIB).strftime('%Y-%m-%d %H:%M:%S WIB')}")
+        em.set_footer(text=f"NIXE • {datetime.now(WIB).strftime('%Y-%m-%d %H:%M:%S WIB')}")
 
         # Thumbnail dari attachment kalau ada (biar layout kanan seperti contoh)
         thumb_url = None

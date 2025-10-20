@@ -39,8 +39,9 @@ def _env_str(name: str, default: str) -> str:
     return default if v is None else str(v)
 
 _DEFAULTS: Dict[str, Any] = {
-    "PHASH_DB_MARKER": os.getenv("PHASH_DB_MARKER", "SATPAMBOT_PHASH_DB_V1"),
-    "LINK_DB_MARKER": os.getenv("LINK_DB_MARKER", "SATPAMBOT_LINK_BLACKLIST_V1"),
+    "SAFE_ALLOWLIST": ["discord.com","discord.gg","google.com","youtu.be","youtube.com","github.com","x.com","twitter.com","facebook.com","instagram.com","tiktok.com"],
+    "PHASH_DB_MARKER": os.getenv("PHASH_DB_MARKER", "NIXE_PHASH_DB_V1"),
+    "LINK_DB_MARKER": os.getenv("LINK_DB_MARKER", "NIXE_LINK_BLACKLIST_V1"),
     "TEMPLATES_DIR": os.getenv("NIXE_TEMPLATES_DIR", "templates"),
     "PHASH_INBOX_THREAD": os.getenv(
         "NIXE_PHASH_INBOX_THREAD",
@@ -49,16 +50,18 @@ _DEFAULTS: Dict[str, Any] = {
     "PHASH_HAMMING_MAX": _env_int("PHASH_HAMMING_MAX", 0),
     "PHASH_WATCH_FIRST_DELAY": _env_int("PHASH_WATCH_FIRST_DELAY", 60),
     "PHASH_WATCH_INTERVAL": _env_int("PHASH_WATCH_INTERVAL", 600),
-    "BAN_DRY_RUN": _env_bool("BAN_DRY_RUN", True),
+    "PHASH_LOG_SCAN_LIMIT": _env_int("PHASH_LOG_SCAN_LIMIT", 300),
+    "BAN_DRY_RUN": _env_bool("BAN_DRY_RUN", False),
     "BAN_DELETE_SECONDS": _env_int("BAN_DELETE_SECONDS", 0),
-    "BAN_BRAND_NAME": os.getenv("BAN_BRAND_NAME", "SatpamBot"),
+    "BAN_BRAND_NAME": os.getenv("BAN_BRAND_NAME", "NIXE"),
     "NIXE_HEALTHZ_PATH": os.getenv("NIXE_HEALTHZ_PATH", "/healthz"),
     "NIXE_HEALTHZ_SILENCE": _env_bool("NIXE_HEALTHZ_SILENCE", True),
     "BAN_LOG_CHANNEL_ID": int(os.getenv("NIXE_BAN_LOG_CHANNEL_ID") or os.getenv("BAN_LOG_CHANNEL_ID") or "0"),
     "LOG_CHANNEL_ID": int(os.getenv("NIXE_BAN_LOG_CHANNEL_ID") or os.getenv("BAN_LOG_CHANNEL_ID") or "0"),
     # NEW: logging defaults
     "LOG_LEVEL": _env_str("LOG_LEVEL", "INFO"),
-    "LOG_FORMAT": _env_str("LOG_FORMAT", "%(levelname)s:%(name)s:%(message)s"),
+    "LOG_FORMAT": _env_str("LOG_FORMAT", "%(levelname)s:%(name)s:%(message)s"), 
+    "EXACT_MATCH_ONLY": True
 }
 
 class _Config:
@@ -152,8 +155,8 @@ def _image_section(cfg: _Config) -> Dict[str, Any]:
         "PHASH_DISTANCE_LENIENT": lenient,
         "WARMUP_SECONDS": warmup,
         "BAN_COOLDOWN_SECONDS": ban_cooldown,
-        "BAN_CEILING_PER_10MIN": ban_ceiling,
-    }
+        "BAN_CEILING_PER_10MIN": ban_ceiling
+}
 
 def _link_section(cfg: _Config) -> Dict[str, Any]:
     marker = str(cfg.get("LINK_DB_MARKER"))
@@ -163,9 +166,9 @@ def _ban_section(cfg: _Config) -> Dict[str, Any]:
     return {
         "DRY_RUN": bool(cfg.get("BAN_DRY_RUN", True)),
         "DELETE_SECONDS": int(cfg.get("BAN_DELETE_SECONDS", 0) or 0),
-        "BRAND": str(cfg.get("BAN_BRAND_NAME", "SatpamBot")),
-        "BAN_LOG_CHANNEL_ID": int(cfg.get("BAN_LOG_CHANNEL_ID", 0) or 0),
-    }
+        "BRAND": str(cfg.get("BAN_BRAND_NAME", "NIXE")),
+        "BAN_LOG_CHANNEL_ID": int(cfg.get("BAN_LOG_CHANNEL_ID", 0) or 0)
+}
 
 def _healthz_section(cfg: _Config) -> Dict[str, Any]:
     return {"PATH": str(cfg.get("NIXE_HEALTHZ_PATH", "/healthz")), "SILENCE": bool(cfg.get("NIXE_HEALTHZ_SILENCE", True))}

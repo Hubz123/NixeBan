@@ -12,7 +12,7 @@ class BanlogRedirectShim(commands.Cog):
 
     async def cog_load(self):
         try:
-            import satpambot.bot.modules.discord_bot.helpers.banlog_thread as leina_banlog  # type: ignore
+            import nixe.helpers.banlog_thread as leina_banlog  # type: ignore
         except Exception as e:
             log.info("[banlog-redirect] Leina helper not found; using NIXE-only.")
             return

@@ -22,7 +22,7 @@ except Exception:
     _imagehash = None
 
 # Read same env/marker as runtime (no imports to avoid circular deps)
-MARKER = os.getenv("PHASH_DB_MARKER", "SATPAMBOT_PHASH_DB_V1")
+MARKER = os.getenv("PHASH_DB_MARKER", "NIXE_PHASH_DB_V1")
 _DEFAULT_INBOX = "imagephising,imagelogphising,image-phising,image_phising,image-phishing,image_phishing"
 INBOX_NAMES = [n.strip() for n in os.getenv("PHASH_INBOX_THREAD", _DEFAULT_INBOX).split(",") if n.strip()]
 

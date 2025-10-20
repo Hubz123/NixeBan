@@ -1,4 +1,4 @@
-SATPAMBOT_LINK_BLACKLIST_V1
+NIXE_LINK_BLACKLIST_V1
 ```json
 {"domains": ["example.com", "bad.example"]}
 ```

@@ -6,7 +6,10 @@ from discord.ext import commands
 from ..helpers.urltools import extract_urls, domain_from_url
 from ..helpers.banlog import get_ban_log_channel
 from .ban_embed import build_ban_embed
-from ..config.self_learning_cfg import LOG_CHANNEL_ID, LINK_DB_MARKER
+from ..config.self_learning_cfg import (
+    LOG_CHANNEL_ID, LINK_DB_MARKER, SAFE_ALLOWLIST, EXACT_MATCH_ONLY,
+    BAN_DRY_RUN, BAN_DELETE_SECONDS
+)
 log = logging.getLogger(__name__)
 def _load_blacklist_from_content(content: str) -> Set[str]:
     m = re.search(r"```json\s*(\{.*?\})\s*```", content or '', re.I | re.S)
@@ -49,8 +52,17 @@ class LinkPhishGuard(commands.Cog):
         hit = None
         for u in urls:
             d = domain_from_url(u)
-            if d in bl or any(d.endswith('.'+x) for x in bl):
-                hit = d; break
+            if not d:
+                continue
+            # Allowlist check (subdomains allowed to reduce FP)
+            if any(d == a or d.endswith('.'+a) for a in SAFE_ALLOWLIST):
+                continue
+            if EXACT_MATCH_ONLY:
+                if d in bl:
+                    hit = d; break
+            else:
+                if d in bl or any(d.endswith('.'+x) for x in bl):
+                    hit = d; break
         if not hit: return
         logch = get_ban_log_channel(message.guild)
         if not logch: return

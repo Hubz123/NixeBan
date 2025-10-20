@@ -8,7 +8,7 @@
 # - Aman untuk smoke_cogs.py: tidak ada side-effect di import; loop start di cog_load/before_loop
 #
 # ENV/Config yang digunakan:
-#   PHASH_DB_MARKER           (default: SATPAMBOT_PHASH_DB_V1)
+#   PHASH_DB_MARKER           (default: NIXE_PHASH_DB_V1)
 #   PHASH_INBOX_THREAD        (default: "imagephising,imagelogphising,image-phising,image_phising,image-phishing,image_phishing")
 #   PHASH_WATCH_FIRST_DELAY   (detik; default: 60)
 #   PHASH_WATCH_INTERVAL      (detik; default: 600)
@@ -38,7 +38,7 @@ except Exception:
 log = logging.getLogger(__name__)
 
 # Marker & thread names
-MARKER = os.getenv("PHASH_DB_MARKER", "SATPAMBOT_PHASH_DB_V1").strip()
+MARKER = os.getenv("PHASH_DB_MARKER", "NIXE_PHASH_DB_V1").strip()
 _DEFAULT_INBOX = "imagephising,imagelogphising,image-phising,image_phising,image-phishing,image_phishing"
 INBOX_NAMES = [n.strip() for n in os.getenv("PHASH_INBOX_THREAD", _DEFAULT_INBOX).split(",") if n.strip()]
 HEX16 = re.compile(r"^[0-9a-f]{16}$", re.I)
@@ -110,7 +110,7 @@ def _ensure_embed_summary(msg: discord.Message, total: int) -> Optional[discord.
         description=f"Total unik: **{total}**\n\n_Entry disimpan pada pesan ini; akan selalu di-EDIT, bukan spam._",
         color=0x2e8b57,
     )
-    e.set_footer(text="SatpamBot • pHash inbox watcher")
+    e.set_footer(text="NIXE • pHash inbox watcher")
     return e
 
 class PhashImagephisingInboxWatcher(commands.Cog):
@@ -128,7 +128,7 @@ class PhashImagephisingInboxWatcher(commands.Cog):
     async def _loop_collect(self):
         # Cari channel log
         try:
-            from satpambot.bot.modules.discord_bot.config.self_learning_cfg import LOG_CHANNEL_ID
+            from nixe.config.self_learning_cfg import LOG_CHANNEL_ID
         except Exception:
             LOG_CHANNEL_ID = 0
 
