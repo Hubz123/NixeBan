@@ -1,4 +1,4 @@
-# nixe/config/__init__.py  (v11: cfg.image is DotDict; load('image') still dict)
+# nixe/config/__init__.py  (v12: top-level cfg.log_level / log_format; sections=DotDict)
 from __future__ import annotations
 import os
 from typing import Any, Dict, List, Tuple
@@ -34,6 +34,10 @@ def _env_bool(name: str, default: bool) -> bool:
     try: return bool(int(s))
     except Exception: return default
 
+def _env_str(name: str, default: str) -> str:
+    v = os.getenv(name)
+    return default if v is None else str(v)
+
 _DEFAULTS: Dict[str, Any] = {
     "PHASH_DB_MARKER": os.getenv("PHASH_DB_MARKER", "SATPAMBOT_PHASH_DB_V1"),
     "LINK_DB_MARKER": os.getenv("LINK_DB_MARKER", "SATPAMBOT_LINK_BLACKLIST_V1"),
@@ -52,6 +56,9 @@ _DEFAULTS: Dict[str, Any] = {
     "NIXE_HEALTHZ_SILENCE": _env_bool("NIXE_HEALTHZ_SILENCE", True),
     "BAN_LOG_CHANNEL_ID": int(os.getenv("NIXE_BAN_LOG_CHANNEL_ID") or os.getenv("BAN_LOG_CHANNEL_ID") or "0"),
     "LOG_CHANNEL_ID": int(os.getenv("NIXE_BAN_LOG_CHANNEL_ID") or os.getenv("BAN_LOG_CHANNEL_ID") or "0"),
+    # NEW: logging defaults
+    "LOG_LEVEL": _env_str("LOG_LEVEL", "INFO"),
+    "LOG_FORMAT": _env_str("LOG_FORMAT", "%(levelname)s:%(name)s:%(message)s"),
 }
 
 class _Config:
@@ -66,9 +73,12 @@ class _Config:
         self._sections: Dict[str, Dict[str, Any]] = {}
 
     def get(self, key: str, default: Any = None) -> Any:
+        # prefer file defaults, then env, then provided default
         return self._src.get(key, os.getenv(key, default))
 
+    # Attribute access for sections AND simple keys (log_level etc.)
     def __getattr__(self, key: str) -> Any:
+        # Lazy sections first
         if key in self._sections:
             return self._sections[key]
         if key == "image":
@@ -79,10 +89,22 @@ class _Config:
             sec = DotDict(_ban_section(self)); self._sections[key] = sec; return sec
         if key == "healthz":
             sec = DotDict(_healthz_section(self)); self._sections[key] = sec; return sec
+        # Simple keys (case-insensitive); allow lower-case aliases
+        key_up = key.upper()
+        if key_up in self._src: return self._src[key_up]
+        env = os.getenv(key_up)
+        if env is not None: return env
+        # lower-case aliases: log_level / log_format
+        if key in {"log_level","logformat","log_format"}:
+            if key == "log_level":
+                return self._src.get("LOG_LEVEL", "INFO")
+            return self._src.get("LOG_FORMAT", "%(levelname)s:%(name)s:%(message)s")
         raise AttributeError(key)
 
     def __dir__(self):
-        base = set(super().__dir__()); base.update({"image","link","ban","healthz"}); return sorted(base)
+        base = set(super().__dir__())
+        base.update({"image","link","ban","healthz","log_level","log_format"})
+        return sorted(base)
 
 def _split_threads(raw: Any) -> List[str]:
     if raw is None: return []
@@ -153,10 +175,10 @@ def load(section: str | None = None):
     if not section:
         return cfg
     s = str(section).strip().lower()
-    if s in {"image","images","phash"}: return _image_section(cfg)   # still plain dict
-    if s in {"link","links","url"}: return _link_section(cfg)        # still plain dict
-    if s in {"ban","moderation"}: return _ban_section(cfg)           # still plain dict
-    if s in {"healthz","health"}: return _healthz_section(cfg)       # still plain dict
+    if s in {"image","images","phash"}: return _image_section(cfg)
+    if s in {"link","links","url"}: return _link_section(cfg)
+    if s in {"ban","moderation"}: return _ban_section(cfg)
+    if s in {"healthz","health"}: return _healthz_section(cfg)
     return cfg
 
 # Module-level section objects (as DotDict for attr access)
