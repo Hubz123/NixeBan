@@ -1,63 +1,159 @@
-# main.py — Render Web + Discord bot + quiet /healthz
-import os, asyncio, logging
-from fastapi import FastAPI
-import uvicorn
-from nixe.web.quiet_healthz import install_fastapi_quiet_healthz, install_quiet_accesslog
-from nixe import config as cfg
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+from __future__ import annotations
 
-import discord
-from discord.ext import commands
+import os
+import asyncio
+import logging
+from typing import Optional
 
-# Logging
-C = cfg.load()
-level = getattr(logging, str(C.log_level).upper(), logging.INFO)
-logging.basicConfig(level=level, format=os.getenv("LOG_FORMAT", "%(levelname)s:%(name)s:%(message)s"))
-install_quiet_accesslog()
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="%(levelname)s:%(name)s:%(message)s",
+)
+log = logging.getLogger("entry.main")
 
-# FastAPI app + /healthz (204) — silent in accesslog
-app = FastAPI()
-install_fastapi_quiet_healthz(app)
+def _load_dotenv_early() -> None:
+    try:
+        from dotenv import load_dotenv, find_dotenv  # type: ignore
+    except Exception:
+        return
+    for f in [os.getenv("ENV_FILE"), ".env", "Nixe.env", "NIXE.env", "SatpamBot.env", "satpambot.env"]:
+        if f and os.path.exists(f):
+            load_dotenv(f, override=False)
+            print(f"✅ Loaded env file: {f}")
+            break
+    else:
+        auto = find_dotenv(filename=".env", usecwd=True)
+        if auto:
+            load_dotenv(auto, override=False)
+            print(f"✅ Loaded env file: {auto}")
 
-# Discord bot
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+_load_dotenv_early()
 
-async def _load_cogs():
-    for ext in [
-        "nixe.cogs.phash_inbox_watcher",
-        "nixe.cogs.image_phish_guard",
-        "nixe.cogs.link_phish_guard",
-        "nixe.cogs.ban_commands",
-    ]:
+def _cfg_get(key: str, default=None):
+    try:
+        from nixe.config import load as _load_cfg  # type: ignore
+        cfg = _load_cfg()
+        if isinstance(cfg, dict):
+            return cfg.get(key, default)
+    except Exception:
+        pass
+    return default
+
+def _get_token() -> Optional[str]:
+    tok = os.environ.get("DISCORD_TOKEN") or os.environ.get("BOT_TOKEN")
+    if not tok:
+        tok = _cfg_get("BOT_TOKEN", "") or ""
+    tok = (tok or "").strip()
+    return tok or None
+
+HOST = os.getenv("HOST", "0.0.0.0")
+PORT = int(os.getenv("PORT", os.getenv("WEB_PORT", "10000")))
+WEB_THREADS = int(os.getenv("WEB_THREADS", "8"))
+WEB_LOG_LEVEL = os.getenv("WEB_LOG_LEVEL", "WARNING").upper()
+
+async def _run_web_async() -> None:
+    try:
+        import uvicorn  # type: ignore
+        app_ref = None
         try:
-            await bot.load_extension(ext)
-        except Exception as e:
-            logging.getLogger("nixe").warning("load_extension %s failed: %s", ext, e)
+            from nixe.web.asgi import app as _  # type: ignore
+            app_ref = ("nixe.web.asgi", "app")
+        except Exception:
+            pass
+        if app_ref is None:
+            try:
+                from app import app as _  # type: ignore
+                app_ref = ("app", "app")
+            except Exception:
+                pass
+        if app_ref is not None:
+            log.info("🌐 Serving web (uvicorn) on %s:%s", HOST, PORT)
+            config = uvicorn.Config(f"{app_ref[0]}:{app_ref[1]}", host=HOST, port=PORT, log_level=WEB_LOG_LEVEL.lower(), lifespan="auto")
+            server = uvicorn.Server(config)
+            await server.serve()
+            return
+    except Exception:
+        pass
 
-@bot.event
-async def on_ready():
-    logging.getLogger("nixe").info("Bot ready as %s", bot.user)
+    try:
+        from waitress import serve as waitress_serve  # type: ignore
+        try:
+            from app import app as flask_app  # type: ignore
+            logging.getLogger("waitress").setLevel(getattr(logging, WEB_LOG_LEVEL, logging.WARNING))
+            log.info("🌐 Serving web (waitress) on %s:%s", HOST, PORT)
+            await asyncio.get_event_loop().run_in_executor(None, lambda: waitress_serve(flask_app, host=HOST, port=PORT, threads=WEB_THREADS))
+            return
+        except Exception:
+            pass
+    except Exception:
+        pass
 
-async def run_bot():
-    await _load_cogs()
-    token = os.environ["DISCORD_TOKEN"]
-    await bot.start(token)
+    try:
+        from wsgiref.simple_server import make_server, WSGIRequestHandler
+        from app import app as wsgi_app  # type: ignore
 
-async def run_web():
-    port = int(os.getenv("PORT", "8000"))
-    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="warning")
-    server = uvicorn.Server(config)
-    await server.serve()
+        class QuietHandler(WSGIRequestHandler):
+            def log_message(self, fmt, *args):
+                if WEB_LOG_LEVEL == "DEBUG":
+                    super().log_message(fmt, *args)
 
-async def main():
-    bot_task = asyncio.create_task(run_bot())
-    web_task = asyncio.create_task(run_web())
-    done, pending = await asyncio.wait({bot_task, web_task}, return_when=asyncio.FIRST_EXCEPTION)
-    for t in pending: t.cancel()
-    # If web server exits (Render stop/restart), close bot gracefully
-    if bot_task in done and not bot.is_closed():
-        await bot.close()
+        log.info("🌐 Serving web (wsgiref) on %s:%s", HOST, PORT)
+        def _serve():
+            httpd = make_server(HOST, PORT, wsgi_app, handler_class=QuietHandler)
+            httpd.serve_forever()
+        await asyncio.get_event_loop().run_in_executor(None, _serve)
+    except Exception:
+        logging.getLogger("entry.main").warning("🌐 Web app not found; running without web")
+
+async def _run_bot_async(token: str) -> None:
+    # Prefer nixe.discord.shim_runner (requires nixe/discord/__init__.py)
+    try:
+        from nixe.discord import shim_runner  # type: ignore
+    except Exception as e1:
+        # Fallback flat layout
+        try:
+            from nixe import shim_runner  # type: ignore
+        except Exception as e2:
+            raise ImportError(f"Cannot import shim_runner. Tried nixe.discord & nixe root. Errors: {e1!r} / {e2!r}")
+
+    await shim_runner.start_bot(token)
+
+async def main() -> None:
+    web_enabled = os.getenv("RUN_WEB", "1") != "0"
+    token = _get_token()
+
+    if web_enabled:
+        log.info("🌐 Web is enabled (HOST=%s PORT=%s)", HOST, PORT)
+    else:
+        log.info("🌐 Web disabled by RUN_WEB=0")
+
+    if not token:
+        log.error("DISCORD_TOKEN/BOT_TOKEN env/config is missing; running WEB-ONLY mode (bot skipped).")
+        if web_enabled:
+            await _run_web_async()
+        return
+
+    tasks = []
+    if web_enabled:
+        tasks.append(asyncio.create_task(_run_web_async(), name="web"))
+    tasks.append(asyncio.create_task(_run_bot_async(token), name="bot"))
+
+    try:
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        try:
+            from nixe.discord import shim_runner as _shim  # type: ignore
+            await _shim.shutdown()
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     try:
