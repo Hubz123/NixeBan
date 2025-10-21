@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "threshold": {
+    "phash": 10,
+    "ahash": 12,
+    "dhash": 12
+  },
+  "entries": [
+    {
+      "label": "blue_archive_tenroll_full",
+      "normalize": "full",
+      "phash": "ffedfce080f18090",
+      "ahash": "1814f7f7efff1080",
+      "dhash": "70e4a5a49cec2401"
+    },
+    {
+      "label": "blue_archive_tenroll_band",
+      "normalize": "band",
+      "phash": "ffff9594db808080",
+      "ahash": "12101042cfcfcfef",
+      "dhash": "a4a5a5a69c9c9c98"
+    }
+  ]
+}

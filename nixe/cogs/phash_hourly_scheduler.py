@@ -1,5 +1,7 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
+import discord
+import os
+# -*- coding: utf-8 -*-
 
 import asyncio, logging, discord
 from discord.ext import commands, tasks
@@ -23,6 +25,11 @@ class PhashHourlyScheduler(commands.Cog):
 
     @tasks.loop(seconds=PHASH_INTERVAL_SECONDS)
     async def loop_collect(self):
+        if getattr(self, '_log_ch', None):
+            try:
+                await self._log_ch.send('✅ pHash hourly tick OK')
+            except Exception:
+                pass
         await self.bot.wait_until_ready()
         if not LOG_CHANNEL_ID:
             log.info("[phash_hourly] skip: LOG_CHANNEL_ID not set")

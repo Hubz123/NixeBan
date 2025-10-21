@@ -1,0 +1,1 @@
+Set env LUCKY_PULL_LOG=1 untuk melihat jarak hash; gunakan !luckytest untuk kalibrasi.

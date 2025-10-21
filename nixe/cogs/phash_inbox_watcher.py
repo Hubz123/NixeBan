@@ -57,8 +57,10 @@ def _norm_list(obj) -> List[str]:
     return uniq
 
 class NixePhashInboxWatcher(commands.Cog):
+    _started = False
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._started = False
         self.loop = self._loop_collect.start()
 
     def cog_unload(self):
@@ -221,3 +223,13 @@ class NixePhashInboxWatcher(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(NixePhashInboxWatcher(bot))
+
+
+async def cog_load(self):
+    if self._started:
+        return
+    self._started = True
+    try:
+        self.loop.start()
+    except Exception:
+        pass

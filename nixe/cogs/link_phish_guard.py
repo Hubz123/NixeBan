@@ -6,10 +6,7 @@ from discord.ext import commands
 from ..helpers.urltools import extract_urls, domain_from_url
 from ..helpers.banlog import get_ban_log_channel
 from .ban_embed import build_ban_embed
-from ..config.self_learning_cfg import (
-    LOG_CHANNEL_ID, LINK_DB_MARKER, SAFE_ALLOWLIST, EXACT_MATCH_ONLY,
-    BAN_DRY_RUN, BAN_DELETE_SECONDS
-)
+from ..config.self_learning_cfg import LOG_CHANNEL_ID, PHASH_DB_MARKER, PHASH_HAMMING_MAX, PHASH_INBOX_THREAD
 log = logging.getLogger(__name__)
 def _load_blacklist_from_content(content: str) -> Set[str]:
     m = re.search(r"```json\s*(\{.*?\})\s*```", content or '', re.I | re.S)

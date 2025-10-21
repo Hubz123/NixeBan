@@ -6,10 +6,7 @@ from typing import Optional, List, Set
 import discord
 from discord.ext import commands
 
-from ..config.self_learning_cfg import (
-    LOG_CHANNEL_ID, PHASH_INBOX_THREAD, PHASH_AUTOBAN_ENABLED,
-    PHASH_HAMMING_MAX, BAN_DRY_RUN, BAN_DELETE_SECONDS
-)
+from ..config.self_learning_cfg import LOG_CHANNEL_ID, PHASH_DB_MARKER, PHASH_HAMMING_MAX, PHASH_INBOX_THREAD
 from .ban_embed import build_ban_embed
 from ..helpers.banlog import get_ban_log_channel
 

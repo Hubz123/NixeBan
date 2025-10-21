@@ -5,6 +5,7 @@ Cog: PhashRuntimeLogTamer
 - Tidak menyentuh konfigurasi lain; aman untuk digabung.
 """
 import os
+import os
 import logging
 from discord.ext import commands
 
