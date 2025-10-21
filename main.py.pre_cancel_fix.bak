@@ -223,10 +223,7 @@ async def _supervise_once() -> None:
     wait_for = asyncio.create_task(_shutdown_event.wait(), name="shutdown-wait")
     tasks.append(wait_for)
 
-    try:
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-    except asyncio.CancelledError:
-        done, pending = set(), set(tasks)
+    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
 
     # Ada yang selesai → cancel sisanya
     for t in pending:
