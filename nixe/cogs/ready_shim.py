@@ -1,39 +1,23 @@
 from __future__ import annotations
-import asyncio, logging
+
+import logging
 import discord
 from discord.ext import commands
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("nixe.cogs.ready_shim")
 
 class ReadyShim(commands.Cog):
-    """Leina-style 'ready' shim.
-    - Guarantees on_ready is logged **once**
-    - Exposes `wait_until_ready_once()` for other cogs that need a late start
-    - Useful on platforms like Render where connect/resume may happen multiple times
-    """
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-        self._ready_once = asyncio.Event()
-
-    async def wait_until_ready_once(self):
-        """Await this in other cogs to defer work until the first on_ready fired."""
-        await self._ready_once.wait()
 
     @commands.Cog.listener()
     async def on_ready(self):
-        if not self._ready_once.is_set():
-            self._ready_once.set()
-            log.info("[ready] Bot ready as %s (%s)", self.bot.user, getattr(self.bot.user, "id", "?"))
-        else:
-            log.info("[ready] Resumed as %s", self.bot.user)
-
-    @commands.Cog.listener()
-    async def on_connect(self):
-        log.debug("[ready] Connected to gateway")
-
-    @commands.Cog.listener()
-    async def on_resumed(self):
-        log.debug("[ready] Session resumed")
+        user = self.bot.user
+        uid = getattr(user, "id", "?")
+        tag = f"{getattr(user, 'name', 'Nixe')}#{getattr(user, 'discriminator', '8056')}" if getattr(user, 'discriminator', None) else getattr(user, 'name', 'Nixe')
+        log.info("[ready] Bot ready as %s (%s)", tag if tag else user, uid)
 
 async def setup(bot: commands.Bot):
+    if 'ReadyShim' in bot.cogs:
+        return
     await bot.add_cog(ReadyShim(bot))

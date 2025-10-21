@@ -1,1 +1,30 @@
-import os\nfrom __future__ import annotations\nimport os, logging, time, discord\nfrom discord.ext import tasks\n\nlog = logging.getLogger(__name__)\n\n# module config helper\ndef _cfg(key, default=None):\n    try:\n        from nixe.config import load as _load_cfg  # type: ignore\n        cfg = _load_cfg() or {}\n        return cfg.get(key, default)\n    except Exception:\n        return default\n\ndef _int(v, d=0):\n    try:\n        return int(v)\n    except Exception:\n        return d\n\ndef _bool(v, d=False):\n    if isinstance(v, bool): return v\n    if v is None: return d\n    return str(v).lower() in ("1","true","yes","on")\n\nHEARTBEAT_ENABLE = _bool(_cfg("HEARTBEAT_ENABLE", False), False)\nSTATUS_EMBED_ON_READY = _bool(_cfg("STATUS_EMBED_ON_READY", False), False)\nLOG_CHANNEL_ID = _int(_cfg("BAN_LOG_CHANNEL_ID", _cfg("LOG_CHANNEL_ID", 0)), 0)\nMODE = os.getenv("FLASK_ENV", _cfg("FLASK_ENV", "production"))\n\n# BAN dedupe\n_ban_seen = {}\nasync def _ban_once(self: discord.Guild, user, *args, **kwargs):\n    ttl = _int(os.getenv("BAN_DEDUP_TTL", "10"), 10)\n    uid = getattr(user, "id", user)\n    key = f"{self.id}:{uid}"\n    now = time.time()\n    exp = _ban_seen.get(key, 0)\n    if exp > now:\n        return\n    _ban_seen[key] = now + max(1, ttl)\n    return await _orig_ban(self, user, *args, **kwargs)\n\nif not hasattr(discord.Guild, "_nixe_ban_patched"):\n    _orig_ban = discord.Guild.ban\n    discord.Guild.ban = _ban_once\n    discord.Guild._nixe_ban_patched = True\n\n_last_hb_ts = 0\n@tasks.loop(minutes=30)\nasync def status_heartbeat(bot, ch_id: int):\n    global _last_hb_ts\n    if not HEARTBEAT_ENABLE:\n        return\n    ch = bot.get_channel(ch_id) if ch_id else None\n    if ch and isinstance(ch, discord.TextChannel):\n        try:\n            now = time.time()\n            if now - _last_hb_ts < 600:\n                return\n            _last_hb_ts = now\n            uptime = int(now - getattr(bot, "start_time", now))\n            embed = discord.Embed(title="NIXE Status", description=f"✅ Online\n⏱️ Uptime: ~{uptime}s")\n            await ch.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())\n        except Exception:\n            pass\n\nasync def wire_handlers(bot: discord.Client):\n    @bot.event\n    async def setup_hook():\n        try:\n            from nixe.cogs_loader import load_cogs\n            await load_cogs(bot)\n            log.info("🧩 Cogs loaded (core + autodiscover).")\n        except Exception as e:\n            log.error("cogs_loader failed: %s", e, exc_info=True)\n        # optional metrics\n        if os.getenv("METRICS_DISABLE", "0") not in ("1", "true", "TRUE"):\n            for ext in ("nixe.cogs.live_metrics_push", "nixe.metrics.live_metrics_push"):\n                try:\n                    if ext not in bot.extensions:\n                        await bot.load_extension(ext)\n                        log.info("✅ Loaded metrics cog: %s", ext)\n                        break\n                except Exception:\n                    pass\n\n    @bot.event\n    async def on_ready():\n        try:\n            if not getattr(bot, "start_time", None):\n                import time as _t; bot.start_time = _t.time()\n            user = getattr(bot, "user", None)\n            log.info("✅ Bot berhasil login sebagai %s (ID: %s)", getattr(user, "name", "?"), getattr(user, "id", "?"))\n            log.info("🌐 Mode: %s", MODE)\n        except Exception:\n            log.info("✅ Bot login.")\n        if HEARTBEAT_ENABLE and not status_heartbeat.is_running():\n            status_heartbeat.start(bot, LOG_CHANNEL_ID)\n        if STATUS_EMBED_ON_READY and LOG_CHANNEL_ID:\n            try:\n                ch = bot.get_channel(LOG_CHANNEL_ID)\n                if ch and isinstance(ch, discord.TextChannel):\n                    uptime = int(time.time() - getattr(bot, "start_time", time.time()))\n                    embed = discord.Embed(title="NIXE Status", description=f"✅ Online\n⏱️ Uptime: ~{uptime}s")\n                    await ch.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())\n            except Exception:\n                pass\n\n    @bot.event\n    async def on_message(message: discord.Message):\n        if getattr(message.author, "bot", False):\n            return\n        try:\n            from .message_handlers import handle_on_message\n            await handle_on_message(bot, message)\n        except Exception as e:\n            log.error("on_message pipeline error: %s", e)\n        try:\n            from discord.ext import commands as _commands\n            if isinstance(bot, _commands.Bot):\n                await bot.process_commands(message)\n        except Exception as e:\n            log.error("process_commands error: %s", e)
+from __future__ import annotations
+
+import os
+import logging
+import discord
+from discord.ext import commands
+
+log = logging.getLogger("nixe.discord.handlers_crucial")
+
+class NixeHandlersCrucial(commands.Cog):
+    def __init__(self, bot: commands.Bot) -> None:
+        self.bot = bot
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        # Print the exact lines users expect
+        log.info("🧩 Cogs loaded (core + autodiscover).")
+        user = self.bot.user
+        uid = getattr(user, "id", "?")
+        # Discord.py v2 removed discriminator for new users; handle both
+        tag = f"{getattr(user, 'name', 'Nixe')}#{getattr(user, 'discriminator', '8056')}" if getattr(user, 'discriminator', None) else getattr(user, 'name', 'Nixe')
+        log.info("✅ Bot berhasil login sebagai %s (ID: %s)", tag if tag else user, uid)
+        mode = os.getenv("NIXE_MODE", "production")
+        log.info("🌐 Mode: %s", mode)
+
+async def setup(bot: commands.Bot):
+    # Avoid duplicate add
+    if 'NixeHandlersCrucial' in bot.cogs:
+        return
+    await bot.add_cog(NixeHandlersCrucial(bot))
