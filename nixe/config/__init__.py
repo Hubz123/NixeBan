@@ -1,193 +1,104 @@
-# nixe/config/__init__.py  (v12: top-level cfg.log_level / log_format; sections=DotDict)
 from __future__ import annotations
-import os
-from typing import Any, Dict, List, Tuple
+import os, json
+from typing import Any, Dict, List
 
-try:
-    from .self_learning_cfg import *  # noqa
-    import nixe.config.self_learning_cfg as _cfg
-except Exception:
-    _cfg = None
+def _as_bool(v: Any, default: bool=False) -> bool:
+    if isinstance(v, bool): return v
+    if v is None: return default
+    s = str(v).strip().lower()
+    if s in {'1','true','yes','on'}: return True
+    if s in {'0','false','no','off'}: return False
+    return default
 
-class DotDict(dict):
-    __slots__ = ()
-    def __getattr__(self, k):
-        try: return self[k]
-        except KeyError as e: raise AttributeError(k) from e
-    def __setattr__(self, k, v): self[k] = v
-    def copy(self): return DotDict(super().copy())
-
-def _env_int(name: str, default: int) -> int:
+def _as_int(v: Any, default: int=0) -> int:
     try:
-        v = os.getenv(name)
-        if v is None: return default
-        return int(str(v).strip())
+        return int(v)
     except Exception:
         return default
 
-def _env_bool(name: str, default: bool) -> bool:
-    v = os.getenv(name)
-    if v is None: return default
-    s = str(v).strip().lower()
-    if s in {"1","true","yes","on"}: return True
-    if s in {"0","false","no","off"}: return False
-    try: return bool(int(s))
-    except Exception: return default
+def _as_list(v: Any) -> List[str]:
+    if v is None: return []
+    if isinstance(v, list): return v
+    s = str(v).strip()
+    if not s: return []
+    try:
+        j = json.loads(s)
+        if isinstance(j, list):
+            return [str(x) for x in j]
+    except Exception:
+        pass
+    return [x.strip() for x in s.split(',') if x.strip()]
 
-def _env_str(name: str, default: str) -> str:
-    v = os.getenv(name)
-    return default if v is None else str(v)
+def _env_str(name: str, default: str = '') -> str:
+    return os.getenv(name, default)
 
-_DEFAULTS: Dict[str, Any] = {
-    "SAFE_ALLOWLIST": ["discord.com","discord.gg","google.com","youtu.be","youtube.com","github.com","x.com","twitter.com","facebook.com","instagram.com","tiktok.com"],
-    "PHASH_DB_MARKER": os.getenv("PHASH_DB_MARKER", "NIXE_PHASH_DB_V1"),
-    "LINK_DB_MARKER": os.getenv("LINK_DB_MARKER", "NIXE_LINK_BLACKLIST_V1"),
-    "TEMPLATES_DIR": os.getenv("NIXE_TEMPLATES_DIR", "templates"),
-    "PHASH_INBOX_THREAD": os.getenv(
-        "NIXE_PHASH_INBOX_THREAD",
-        os.getenv("PHASH_INBOX_THREAD", "imagephising,imagelogphising,image-phising,image_phising,image-phishing,image_phishing")
-    ),
-    "PHASH_HAMMING_MAX": _env_int("PHASH_HAMMING_MAX", 0),
-    "PHASH_WATCH_FIRST_DELAY": _env_int("PHASH_WATCH_FIRST_DELAY", 60),
-    "PHASH_WATCH_INTERVAL": _env_int("PHASH_WATCH_INTERVAL", 600),
-    "PHASH_LOG_SCAN_LIMIT": _env_int("PHASH_LOG_SCAN_LIMIT", 300),
-    "BAN_DRY_RUN": _env_bool("BAN_DRY_RUN", False),
-    "BAN_DELETE_SECONDS": _env_int("BAN_DELETE_SECONDS", 0),
-    "BAN_BRAND_NAME": os.getenv("BAN_BRAND_NAME", "NIXE"),
-    "NIXE_HEALTHZ_PATH": os.getenv("NIXE_HEALTHZ_PATH", "/healthz"),
-    "NIXE_HEALTHZ_SILENCE": _env_bool("NIXE_HEALTHZ_SILENCE", True),
-    "BAN_LOG_CHANNEL_ID": int(os.getenv("NIXE_BAN_LOG_CHANNEL_ID") or os.getenv("BAN_LOG_CHANNEL_ID") or "0"),
-    "LOG_CHANNEL_ID": int(os.getenv("NIXE_BAN_LOG_CHANNEL_ID") or os.getenv("BAN_LOG_CHANNEL_ID") or "0"),
-    # NEW: logging defaults
-    "LOG_LEVEL": _env_str("LOG_LEVEL", "INFO"),
-    "LOG_FORMAT": _env_str("LOG_FORMAT", "%(levelname)s:%(name)s:%(message)s"), 
-    "EXACT_MATCH_ONLY": True
+def _env_int(name: str, default: int = 0) -> int:
+    try:
+        return int(os.getenv(name, default))
+    except Exception:
+        return default
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    return _as_bool(os.getenv(name), default)
+
+DEFAULTS: Dict[str, Any] = {
+    'COMMAND_PREFIX': os.getenv('COMMAND_PREFIX', '!'),
+    'BOT_TOKEN': _env_str('DISCORD_TOKEN', _env_str('BOT_TOKEN', '')),
+    'FLASK_ENV': os.getenv('FLASK_ENV', 'production'),
+    'BAN_LOG_CHANNEL_ID': _env_int('BAN_LOG_CHANNEL_ID', _env_int('LOG_CHANNEL_ID', 0)),
+    'HEARTBEAT_ENABLE': False,
+    'STATUS_EMBED_ON_READY': False,
+    'URL_BAN_PATTERNS': [],
+    'PHASH_LOG_SCAN_LIMIT': _env_int('PHASH_LOG_SCAN_LIMIT', 500),
+    'SELF_LEARNING_ENABLE': _env_bool('SELF_LEARNING_ENABLE', False),
+    'SELF_LEARNING_MAX_ITEMS': _env_int('SELF_LEARNING_MAX_ITEMS', 2000),
 }
 
-class _Config:
-    def __init__(self):
-        self._src: Dict[str, Any] = {}
-        if _cfg is not None:
-            for k, v in _cfg.__dict__.items():
-                if k.isupper():
-                    self._src[k] = v
-        for k, v in _DEFAULTS.items():
-            self._src.setdefault(k, v)
-        self._sections: Dict[str, Dict[str, Any]] = {}
+OVERRIDES: Dict[str, Any] = {}
+try:
+    from .local_overrides import OVERRIDES as _LOCAL_OVERRIDES  # type: ignore
+    if isinstance(_LOCAL_OVERRIDES, dict):
+        OVERRIDES.update(_LOCAL_OVERRIDES)
+except Exception:
+    pass
 
-    def get(self, key: str, default: Any = None) -> Any:
-        # prefer file defaults, then env, then provided default
-        return self._src.get(key, os.getenv(key, default))
-
-    # Attribute access for sections AND simple keys (log_level etc.)
-    def __getattr__(self, key: str) -> Any:
-        # Lazy sections first
-        if key in self._sections:
-            return self._sections[key]
-        if key == "image":
-            sec = DotDict(_image_section(self)); self._sections[key] = sec; return sec
-        if key == "link":
-            sec = DotDict(_link_section(self)); self._sections[key] = sec; return sec
-        if key == "ban":
-            sec = DotDict(_ban_section(self)); self._sections[key] = sec; return sec
-        if key == "healthz":
-            sec = DotDict(_healthz_section(self)); self._sections[key] = sec; return sec
-        # Simple keys (case-insensitive); allow lower-case aliases
-        key_up = key.upper()
-        if key_up in self._src: return self._src[key_up]
-        env = os.getenv(key_up)
-        if env is not None: return env
-        # lower-case aliases: log_level / log_format
-        if key in {"log_level","logformat","log_format"}:
-            if key == "log_level":
-                return self._src.get("LOG_LEVEL", "INFO")
-            return self._src.get("LOG_FORMAT", "%(levelname)s:%(name)s:%(message)s")
-        raise AttributeError(key)
-
-    def __dir__(self):
-        base = set(super().__dir__())
-        base.update({"image","link","ban","healthz","log_level","log_format"})
-        return sorted(base)
-
-def _split_threads(raw: Any) -> List[str]:
-    if raw is None: return []
-    if isinstance(raw, (list, tuple, set)):
-        return [str(x).strip() for x in raw if str(x).strip()]
-    s = str(raw)
-    parts = [p.strip() for p in s.replace(";", ",").split(",")]
-    return [p for p in parts if p]
-
-def _image_section(cfg: _Config) -> Dict[str, Any]:
-    names = [t.lower() for t in _split_threads(cfg.get("PHASH_INBOX_THREAD"))]
-    primary = names[0] if names else "imagephising"
-    marker = str(cfg.get("PHASH_DB_MARKER"))
-    strict = _env_int("IMAGE_PHASH_DISTANCE_STRICT", _env_int("PHASH_HAMMING_MAX", 0))
-    lenient = _env_int("IMAGE_PHASH_DISTANCE_LENIENT", strict)
-    warmup = _env_int("IMAGE_WARMUP_SECONDS", 0)
-    ban_cooldown = _env_int("IMAGE_BAN_COOLDOWN_SECONDS", 0)
-    ban_ceiling = _env_int("IMAGE_BAN_CEILING_PER_10MIN", 0)
-    first = _env_int("PHASH_WATCH_FIRST_DELAY", 60)
-    interval = _env_int("PHASH_WATCH_INTERVAL", 600)
-    csv = ",".join(names)
-    return {
-        "THREADS": tuple(names),
-        "THREADS_LIST": list(names),
-        "THREAD_NAMES": list(names),
-        "THREADS_CSV": csv,
-        "IMAGE_PHISH_THREAD_NAMES": csv,
-        "INBOX_THREAD": primary,
-        "THREAD_NAME": primary,
-        "THREAD": primary,
-        "THREAD_ID": int(os.getenv("IMAGE_THREAD_ID") or "0"),
-        "PHASH_DB_MARKER": marker, "DB_MARKER": marker, "MARKER": marker,
-        "LOG_CHANNEL_ID": int(cfg.get("LOG_CHANNEL_ID") or 0),
-        "CHANNEL_ID": int(cfg.get("LOG_CHANNEL_ID") or 0),
-        "phash_distance_strict": strict,
-        "phash_distance_lenient": lenient,
-        "warmup_seconds": warmup,
-        "ban_cooldown_seconds": ban_cooldown,
-        "ban_ceiling_per_10min": ban_ceiling,
-        "HAMMING_MAX": strict,
-        "WATCH_FIRST_DELAY": first,
-        "WATCH_INTERVAL": interval,
-        "TEMPLATES_DIR": cfg.get("TEMPLATES_DIR"),
-        "PHASH_DISTANCE_STRICT": strict,
-        "PHASH_DISTANCE_LENIENT": lenient,
-        "WARMUP_SECONDS": warmup,
-        "BAN_COOLDOWN_SECONDS": ban_cooldown,
-        "BAN_CEILING_PER_10MIN": ban_ceiling
-}
-
-def _link_section(cfg: _Config) -> Dict[str, Any]:
-    marker = str(cfg.get("LINK_DB_MARKER"))
-    return {"LINK_DB_MARKER": marker, "DB_MARKER": marker, "MARKER": marker}
-
-def _ban_section(cfg: _Config) -> Dict[str, Any]:
-    return {
-        "DRY_RUN": bool(cfg.get("BAN_DRY_RUN", True)),
-        "DELETE_SECONDS": int(cfg.get("BAN_DELETE_SECONDS", 0) or 0),
-        "BRAND": str(cfg.get("BAN_BRAND_NAME", "NIXE")),
-        "BAN_LOG_CHANNEL_ID": int(cfg.get("BAN_LOG_CHANNEL_ID", 0) or 0)
-}
-
-def _healthz_section(cfg: _Config) -> Dict[str, Any]:
-    return {"PATH": str(cfg.get("NIXE_HEALTHZ_PATH", "/healthz")), "SILENCE": bool(cfg.get("NIXE_HEALTHZ_SILENCE", True))}
-
-def load(section: str | None = None):
-    cfg = _Config()
-    if not section:
-        return cfg
-    s = str(section).strip().lower()
-    if s in {"image","images","phash"}: return _image_section(cfg)
-    if s in {"link","links","url"}: return _link_section(cfg)
-    if s in {"ban","moderation"}: return _ban_section(cfg)
-    if s in {"healthz","health"}: return _healthz_section(cfg)
+def load() -> Dict[str, Any]:
+    cfg = dict(DEFAULTS)
+    cfg.update(OVERRIDES)
     return cfg
 
-# Module-level section objects (as DotDict for attr access)
-image = DotDict(_image_section(_Config()))
-link = DotDict(_link_section(_Config()))
-ban = DotDict(_ban_section(_Config()))
-healthz = DotDict(_healthz_section(_Config()))
+def get(key: str, default: Any=None) -> Any:
+    return load().get(key, default)
 
-__all__ = ["load", "image", "link", "ban", "healthz"]
+# constants for legacy imports
+COMMAND_PREFIX: str = get('COMMAND_PREFIX', '!')
+BOT_TOKEN: str = get('BOT_TOKEN', '')
+FLASK_ENV: str = get('FLASK_ENV', 'production')
+BAN_LOG_CHANNEL_ID: int = int(get('BAN_LOG_CHANNEL_ID', 0))
+HEARTBEAT_ENABLE: bool = bool(get('HEARTBEAT_ENABLE', False))
+STATUS_EMBED_ON_READY: bool = bool(get('STATUS_EMBED_ON_READY', False))
+URL_BAN_PATTERNS = get('URL_BAN_PATTERNS', [])
+PHASH_LOG_SCAN_LIMIT: int = int(get('PHASH_LOG_SCAN_LIMIT', 500))
+SELF_LEARNING_ENABLE: bool = bool(get('SELF_LEARNING_ENABLE', False))
+SELF_LEARNING_MAX_ITEMS: int = int(get('SELF_LEARNING_MAX_ITEMS', 2000))
+
+
+# ---- NIXE structured config for smoke ----
+class _CfgNS:
+    def __init__(self, d):
+        # expose dict on attributes, and nested sections
+        self.__dict__.update(d)
+        # Provide 'image' structured thresholds for smoke
+        img = {
+            "phash_distance_strict": int(os.getenv("PHASH_DISTANCE_STRICT", "6")),
+            "phash_distance_lenient": int(os.getenv("PHASH_DISTANCE_LENIENT", "10")),
+            "warmup_seconds": int(os.getenv("PHASH_WARMUP_SECONDS", "0")),
+            "ban_cooldown_seconds": int(os.getenv("BAN_COOLDOWN_SECONDS", "10")),
+            "ban_ceiling_per_10min": int(os.getenv("BAN_CEILING_PER_10MIN", "5")),
+        }
+        self.image = img
+
+def load() -> _CfgNS:  # type: ignore[override]
+    cfg = dict(DEFAULTS)
+    cfg.update(OVERRIDES)
+    return _CfgNS(cfg)

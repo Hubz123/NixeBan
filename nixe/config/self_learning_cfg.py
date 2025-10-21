@@ -1,39 +1,60 @@
 from __future__ import annotations
-# Proxy constants to module config (nixe.config.__init__)
-# All settings come from module defaults; ENV is optional and not required.
+import os
 
-from . import image as _image, link as _link, ban as _ban, healthz as _healthz
+# ---- Compatibility constants expected by legacy Leina/Nixe cogs & smoke ----
+# Prefer ENV overrides to avoid editing code in production.
 
-# BAN / LOG
-BAN_LOG_CHANNEL_ID = _ban.get("BAN_LOG_CHANNEL_ID", 0) or _ban.get("LOG_CHANNEL_ID", 0)
-LOG_CHANNEL_ID = BAN_LOG_CHANNEL_ID
-BAN_DELETE_SECONDS = int(_ban.get("BAN_DELETE_SECONDS", 0) or 0)
-BAN_DRY_RUN = bool(_ban.get("BAN_DRY_RUN", False))
-BAN_BRAND_NAME = _ban.get("BAN_BRAND_NAME", "NIXE")
+# Scanning/log limits (raised maximums by default, still safe):
+PHASH_LOG_SCAN_LIMIT: int = int(os.getenv('PHASH_LOG_SCAN_LIMIT', '5000'))
+SELF_LEARNING_ENABLE: bool = os.getenv('SELF_LEARNING_ENABLE', '0').lower() in {'1','true','yes','on'}
+SELF_LEARNING_MAX_ITEMS: int = int(os.getenv('SELF_LEARNING_MAX_ITEMS', '20000'))
 
-# PHASH / IMAGE inbox watcher
-PHASH_INBOX_THREAD = _image.get("PHASH_INBOX_THREAD", "imagephising,imagelogphising,image-phising,image_phising,image-phishing,image_phishing")
-PHASH_DB_MARKER = _image.get("PHASH_DB_MARKER", "NIXE_PHASH_DB_V1")
-PHASH_WATCH_FIRST_DELAY = int(_image.get("PHASH_WATCH_FIRST_DELAY", 60) or 60)
-PHASH_WATCH_INTERVAL = int(_image.get("PHASH_WATCH_INTERVAL", 600) or 600)
-PHASH_HAMMING_MAX = int(_image.get("PHASH_HAMMING_MAX", 0) or 0)
-PHASH_AUTOBAN_ENABLED = bool(_image.get("PHASH_AUTOBAN_ENABLED", False))
+# Branding / behavior flags:
+BAN_BRAND_NAME: str = os.getenv('BAN_BRAND_NAME', os.getenv('BRAND_NAME', 'NIXE'))
+BAN_DRY_RUN: bool = os.getenv('BAN_DRY_RUN', '0').lower() in {'1','true','yes','on'}
 
-# LINK blacklist
-LINK_DB_MARKER = _link.get("LINK_DB_MARKER", "NIXE_LINK_BLACKLIST_V1")
+# Healthz controls:
+NIXE_HEALTHZ_PATH: str = os.getenv('NIXE_HEALTHZ_PATH', '/healthz')
+NIXE_HEALTHZ_SILENCE: bool = os.getenv('NIXE_HEALTHZ_SILENCE', '1').lower() in {'1','true','yes','on'}
+NIXE_HEALTHZ_TOKEN: str = os.getenv('NIXE_HEALTHZ_TOKEN', '')
 
-# Healthz
-NIXE_HEALTHZ_PATH = _healthz.get("PATH", "/healthz")
-NIXE_HEALTHZ_SILENCE = bool(_healthz.get("SILENCE", True))
+# Logging / channels (bridge)
+try:
+    from .__init__ import BAN_LOG_CHANNEL_ID  # type: ignore
+except Exception:
+    BAN_LOG_CHANNEL_ID: int = int(os.getenv('BAN_LOG_CHANNEL_ID', '0'))
 
+# Also expose plain LOG_CHANNEL_ID for older cogs
+LOG_CHANNEL_ID: int = int(os.getenv('LOG_CHANNEL_ID', str(BAN_LOG_CHANNEL_ID)))
 
-# Link guard extras
-SAFE_ALLOWLIST = set(_link.get("SAFE_ALLOWLIST", []))
-EXACT_MATCH_ONLY = bool(_link.get("EXACT_MATCH_ONLY", True))
+try:
+    from .__init__ import URL_BAN_PATTERNS  # type: ignore
+except Exception:
+    URL_BAN_PATTERNS = []
 
+# ---- Link phishing guard knobs ----
+LINK_DB_MARKER: str = os.getenv('LINK_DB_MARKER', 'NIXE_LINK_DB')
+SAFE_ALLOWLIST = [s.strip().lower() for s in os.getenv('SAFE_ALLOWLIST', '').split(',') if s.strip()]
+EXACT_MATCH_ONLY: bool = os.getenv('EXACT_MATCH_ONLY', '0').lower() in {'1','true','yes','on'}
+BAN_DELETE_SECONDS: int = int(os.getenv('BAN_DELETE_SECONDS', '10'))
 
-# Phash scheduler timings & limits
-PHASH_FIRST_DELAY_SECONDS = int(_image.get("PHASH_WATCH_FIRST_DELAY", 60) or 60)
-PHASH_INTERVAL_SECONDS = int(_image.get("PHASH_WATCH_INTERVAL", 600) or 600)
-PHASH_LOG_SCAN_LIMIT = int(_image.get("PHASH_LOG_SCAN_LIMIT", 300) or 300)
+# ---- pHash guard knobs ----
+PHASH_INBOX_THREAD: str = os.getenv('PHASH_INBOX_THREAD', 'inbox,phisinbox')
+PHASH_AUTOBAN_ENABLED: bool = os.getenv('PHASH_AUTOBAN_ENABLED', '1').lower() in {'1','true','yes','on'}
+PHASH_HAMMING_MAX: int = int(os.getenv('PHASH_HAMMING_MAX', '10'))
+PHASH_DB_MARKER: str = os.getenv('PHASH_DB_MARKER', 'NIXE_PHASH_DB')
+PHASH_WATCH_FIRST_DELAY: int = int(os.getenv('PHASH_WATCH_FIRST_DELAY', '5'))
+PHASH_WATCH_INTERVAL: int = int(os.getenv('PHASH_WATCH_INTERVAL', '180'))  # 3 minutes check
+PHASH_FIRST_DELAY_SECONDS: int = int(os.getenv('PHASH_FIRST_DELAY_SECONDS', '5'))
+PHASH_INTERVAL_SECONDS: int = int(os.getenv('PHASH_INTERVAL_SECONDS', '3600'))
 
+__all__ = [
+    'PHASH_LOG_SCAN_LIMIT', 'SELF_LEARNING_ENABLE', 'SELF_LEARNING_MAX_ITEMS',
+    'BAN_BRAND_NAME', 'BAN_DRY_RUN',
+    'NIXE_HEALTHZ_PATH', 'NIXE_HEALTHZ_SILENCE', 'NIXE_HEALTHZ_TOKEN',
+    'BAN_LOG_CHANNEL_ID', 'LOG_CHANNEL_ID', 'URL_BAN_PATTERNS',
+    'LINK_DB_MARKER', 'SAFE_ALLOWLIST', 'EXACT_MATCH_ONLY', 'BAN_DELETE_SECONDS',
+    'PHASH_INBOX_THREAD', 'PHASH_AUTOBAN_ENABLED', 'PHASH_HAMMING_MAX',
+    'PHASH_DB_MARKER', 'PHASH_WATCH_FIRST_DELAY', 'PHASH_WATCH_INTERVAL',
+    'PHASH_FIRST_DELAY_SECONDS', 'PHASH_INTERVAL_SECONDS',
+]
