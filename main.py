@@ -1,1 +1,103 @@
-#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\nimport os\nfrom __future__ import annotations\n\nimport asyncio\nimport logging\nimport os\nimport signal\nimport time\n\n# ---------- Logging ----------\nLOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()\nlogging.basicConfig(\n    level=getattr(logging, LOG_LEVEL, logging.INFO),\n\n# Global shutdown event used by supervisor & web runner\n\n\n    format="%(levelname)s:%(name)s:%(message)s",\n)\n\nfrom typing import Optional\n# Global shutdown event used by supervisor & web runner\n_shutdown_event: Optional[asyncio.Event] = None\n_shutdown_reason: str | None = None\nlog = logging.getLogger("entry.main")\n\n# ---\n# Global shutdown event used by supervisor & web runner\n\n\n# ------- .env loader (opsional) ----------\ndef _load_dotenv_early() -> None:\n    try:\n        from dotenv import load_dotenv, find_dotenv  # type: ignore\n    except Exception:\n        return\n    # Prioritas file .env yang umum dipakai (Leina/Nixe)\n    for f in (os.getenv("ENV_FILE"), ".env", "Nixe.env", "NIXE.env", "NIXE.env", "nixe.env"):\n        if f and os.path.exists(f):\n            load_dotenv(f, override=False)\n            print(f"✅ Loaded env file: {f}")\n            return\n    try:\n        auto = find_dotenv(filename=".env", usecwd=True)  # type: ignore\n        if auto:\n            load_dotenv(auto, override=False)  # type: ignore\n            print(f"✅ Loaded env file: {auto}")\n    except Exception:\n        pass\n\n_load_dotenv_early()\n\n# ---------- Konfigurasi WEB ----------\nHOST = os.getenv("HOST", "0.0.0.0")\nPORT = int(os.getenv("PORT", os.getenv("WEB_PORT", "10000")))\nWEB_LOG_LEVEL = os.getenv("WEB_LOG_LEVEL", "WARNING").lower()\nRUN_WEB_DEFAULT = "1"\n\n# Shutdown event global untuk graceful stop\n\n\n\n\nasync def _run_web() -> None:\n    """Run ASGI app via uvicorn if available; otherwise idle quietly."""\n    global _shutdown_event\n    try:\n        import uvicorn  # type: ignore\n    except Exception:\n        log.warning("🌐 Web app not found; running without web (uvicorn missing)")\n        if _shutdown_event is None:\n            _shutdown_event = asyncio.Event()\n        await _shutdown_event.wait()\n        return\n\n    app_ref = None\n    try:\n        from nixe.web.asgi import app as _  # type: ignore\n        app_ref = ("nixe.web.asgi", "app")\n    except Exception:\n        try:\n            from app import app as _  # type: ignore\n            app_ref = ("app", "app")\n        except Exception:\n            app_ref = None\n\n    if not app_ref:\n        log.warning("🌐 Web app not found; running without web")\n        if _shutdown_event is None:\n            _shutdown_event = asyncio.Event()\n        await _shutdown_event.wait()\n        return\n\n    HOST = os.getenv("HOST", "0.0.0.0")\n    PORT = int(os.getenv("PORT", os.getenv("WEB_PORT", "10000")))\n    WEB_LOG_LEVEL = os.getenv("WEB_LOG_LEVEL", "info")\n\n    import importlib, logging as _logging\n    _logging.getLogger("uvicorn.access").disabled = True  # quiet health checks\n    mod = importlib.import_module(app_ref[0])\n    app = getattr(mod, app_ref[1])\n\n    try:\n        config = uvicorn.Config(app=app, host=HOST, port=PORT, log_level=WEB_LOG_LEVEL, lifespan="off", access_log=False)\n        server = uvicorn.Server(config)\n        await server.serve()\n    except asyncio.CancelledError:\n        pass\n    except Exception as e:\n        log.exception("web runner failed: %s", e)\nasync def _run_bot() -> None:\n    """\n    Jalankan Discord bot via shim_runner, bila token tersedia.\n    """\n    token = (os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN") or "").strip()\n\n    if not token:\n        # coba dari module config (kompatibel Nixe/Leina)\n        try:\n            from nixe.config import load as _load_cfg  # type: ignore\n            cfg = _load_cfg()\n            if isinstance(cfg, dict):\n                token = (cfg.get("BOT_TOKEN") or "").strip()\n            else:\n                token = (getattr(cfg, "BOT_TOKEN", "") or "").strip()\n        except Exception:\n            token = ""\n\n    if not token:\n        log.error("DISCORD_TOKEN/BOT_TOKEN env var is missing; BOT disabled.")\n        return\n\n    # Cari shim start function di beberapa lokasi kompatibel\n    start_fn = None\n    candidates = [\n        ("nixe.discord.shim_runner", "start_bot"),\n        ("nixe.bot.modules.discord_bot", "shim_runner"),  # legacy\n        ("nixe", "shim_runner"),                          # very legacy\n    ]\n    for mod_name, fn_name in candidates:\n        try:\n            mod = __import__(mod_name, fromlist=[fn_name])\n            start_fn = getattr(mod, fn_name, None)\n            if start_fn:\n                break\n        except Exception:\n            continue\n\n    if not start_fn:\n        log.error("Cannot import shim_runner start function from known locations.")\n        return\n\n    try:\n        await start_fn(token)  # type: ignore[misc]\n    except asyncio.CancelledError:\n        # diminta berhenti oleh supervisor\n        pass\n    except Exception as e:\n        log.exception("bot runner failed: %s", e)\n\n\nasync def _graceful_shutdown() -> None:\n    """\n    Panggil shutdown() di shim_runner bila ada, untuk nutup client/HTTP session rapi.\n    """\n    try:\n        from nixe.discord.shim_runner import shutdown as _shutdown  # type: ignore\n    except Exception:\n        _shutdown = None\n    if _shutdown:\n        try:\n            await _shutdown()\n        except Exception as e:\n            log.warning("shutdown hook raised: %s", e)\n\n\n\ndef _handle_sig(signame: str):\n    global _shutdown_event, _shutdown_reason\n    try:\n        import asyncio\n        if _shutdown_event is None:\n            _shutdown_event = asyncio.Event()\n        _shutdown_reason = signame.lower()\n        _shutdown_event.set()\n    except Exception:\n        pass\n\nasync def _supervise_once() -> bool:\n    """\n    Supervisor sekali siklus:\n      - start bot (jika token ada)\n      - start web (jika RUN_WEB != '0')\n      - tunggu salah satu selesai → cancel sisanya → graceful shutdown\n    """\n    global _shutdown_event\n    _shutdown_event = asyncio.Event()\n\n    run_web = os.getenv("RUN_WEB", RUN_WEB_DEFAULT) != "0"\n\n    # Setup signal handler (SIGTERM/SIGINT) untuk Render & lokal\n    loop = asyncio.get_running_loop()\n\n    def _handle_signal(sig: signal.Signals):\n        log.info("Received signal %s → shutting down...", sig.name)\n        if _shutdown_event and not _shutdown_event.is_set():\n            _shutdown_event.set()\n\n    for _sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None)):\n        if _sig is None:\n            continue\n        try:\n            loop.add_signal_handler(_sig, _handle_signal, _sig)  # type: ignore[arg-type]\n        except (NotImplementedError, RuntimeError):\n            # Windows/Python embedders kadang tidak mendukung\n            pass\n\n    # Buat tasks\n    tasks: list[asyncio.Task] = []\n    bot_task = asyncio.create_task(_run_bot(), name="bot")\n    tasks.append(bot_task)\n\n    web_task = None\n    if run_web:\n        web_task = asyncio.create_task(_run_web(), name="web")\n        tasks.append(web_task)\n\n    # Tunggu salah satu selesai (atau signal)\n    wait_for = asyncio.create_task(_shutdown_event.wait(), name="shutdown-wait")\n    tasks.append(wait_for)\n\n    try:\n        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)\n    except asyncio.CancelledError:\n        done, pending = set(), set(tasks)\n\n    # Ada yang selesai → cancel sisanya\n    for t in pending:\n        t.cancel()\n\n    # Tunggu semua task\n    for t in done:\n        try:\n            await t\n        except asyncio.CancelledError:\n            pass\n        except Exception as e:\n            log.exception("task error: %s", e)\n\n    # Panggil hook shutdown\n    await _graceful_shutdown()\n\n    return (_shutdown_reason or ('shutdown' if (_shutdown_event and _shutdown_event.is_set()) else 'unknown'))\n\n    return bool(_shutdown_event and _shutdown_event.is_set())\n\n\ndef main() -> None:\n    """\n    Loop supervisor dengan backoff:\n      - kalau crash Exception → backoff (maks 60s)\n      - kalau return normal → restart ringan 3s (meniru Leina, tapi tidak spam)\n    """\n    backoff = 5\n    while True:\n        try:\n            log.info("🤖 Starting Discord bot process...")\n            should_exit = asyncio.run(_supervise_once())\n            if should_exit:\n                log.info("Shutdown requested; exiting supervisor.")\n                break\n            log.warning("Bot returned gracefully; restarting in 3s...")\n            time.sleep(3)\n            backoff = 5\n        except KeyboardInterrupt:\n            log.info("Shutdown requested by user.")\n            break\n        except Exception as e:\n            # Penting: jangan bikin SyntaxError lagi — 1 baris string saja.\n            # Gunakan exception logging agar stacktrace muncul otomatis.\n            log.exception("Bot crashed: %s", e)\n            log.info("Restarting in %ss...", backoff)\n            time.sleep(backoff)\n            backoff = min(backoff * 2, 60)\n\n\nif __name__ == "__main__":\n    main()
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+import asyncio
+import logging
+import logging.config
+import os
+
+# Load .env if present
+try:
+    from dotenv import load_dotenv, find_dotenv
+    _env = find_dotenv(usecwd=True) or ".env"
+    if _env and os.path.exists(_env):
+        load_dotenv(_env, override=False)
+        print(f"✅ Loaded env file: {_env}")
+except Exception:
+    pass
+
+def _setup_logging() -> None:
+    # Use the classic format: LEVEL:logger: message — ensures newline per record
+    fmt = "%(levelname)s:%(name)s: %(message)s"
+    level = os.getenv("LOG_LEVEL", "INFO").upper()
+    log_config = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "standard": {"format": fmt},
+        },
+        "handlers": {
+            "console": {
+                "class": "logging.StreamHandler",
+                "formatter": "standard",
+                "stream": "ext://sys.stdout",
+            }
+        },
+        "loggers": {
+            # Root logger
+            "": {"handlers": ["console"], "level": level},
+            # Make discord/uvicorn obey the same format
+            "discord": {"level": level, "handlers": ["console"], "propagate": False},
+            "uvicorn": {"level": level, "handlers": ["console"], "propagate": False},
+            "uvicorn.error": {"level": level, "handlers": ["console"], "propagate": False},
+            "uvicorn.access": {"level": os.getenv("UVICORN_ACCESS_LEVEL", "INFO").upper(), "handlers": ["console"], "propagate": False},
+        },
+    }
+    logging.config.dictConfig(log_config)
+
+_setup_logging()
+log = logging.getLogger("entry.main")
+
+async def run_uvicorn() -> None:
+    import uvicorn
+    # Pass a compatible log_config so uvicorn uses the same format
+    fmt = "%(levelname)s:%(name)s: %(message)s"
+    level = os.getenv("LOG_LEVEL", "INFO").upper()
+    uvlog = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {"standard": {"format": fmt}},
+        "handlers": {"default": {"class": "logging.StreamHandler", "formatter": "standard", "stream": "ext://sys.stdout"}},
+        "loggers": {
+            "uvicorn": {"handlers": ["default"], "level": level},
+            "uvicorn.error": {"handlers": ["default"], "level": level, "propagate": False},
+            "uvicorn.access": {"handlers": ["default"], "level": os.getenv("UVICORN_ACCESS_LEVEL", "INFO").upper(), "propagate": False},
+        },
+    }
+    log.info("Starting Uvicorn web server...")
+    config = uvicorn.Config(
+        "nixe.web.asgi:app",
+        host=os.getenv("HOST", "0.0.0.0"),
+        port=int(os.getenv("PORT", "10000")),
+        log_level=level.lower(),
+        lifespan="off",
+        log_config=uvlog,
+    )
+    server = uvicorn.Server(config)
+    await server.serve()
+
+async def run_discord() -> None:
+    from nixe.runner.shim_runner import start_discord_bot
+    log.info("Starting Discord bot task...")
+    await start_discord_bot()
+
+async def amain() -> None:
+    log.info("🤖 Starting NIXE multiprocess (Discord + Web)...")
+    while True:
+        tasks = [asyncio.create_task(run_uvicorn()), asyncio.create_task(run_discord())]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        crashed = False
+        for res in results:
+            if isinstance(res, BaseException):
+                crashed = True
+                log.error("Background task crashed: %r", res, exc_info=True)
+        if not crashed:
+            break
+        await asyncio.sleep(1.0)
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(amain())
+    except KeyboardInterrupt:
+        log.info("Shutdown requested by user.")

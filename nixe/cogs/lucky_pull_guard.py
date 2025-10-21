@@ -52,4 +52,11 @@ class LuckyPullGuard(commands.Cog):
         except Exception: log.debug("[lucky_pull_guard] delete failed", exc_info=True)
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(LuckyPullGuard(bot))
+    # Avoid duplicate registration if loader already added this cog
+    if 'LuckyPullGuard' in getattr(bot, 'cogs', {}):
+        return
+    try:
+        await bot.add_cog(LuckyPullGuard(bot))
+    except Exception:
+        # If already loaded or another race, swallow to keep startup healthy
+        import logging; logging.getLogger(__name__).debug("setup: LuckyPullGuard already loaded or failed softly", exc_info=True)
