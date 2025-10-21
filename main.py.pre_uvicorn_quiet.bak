@@ -98,7 +98,6 @@ async def _run_web() -> None:
     HOST = os.getenv("HOST", "0.0.0.0")
     PORT = int(os.getenv("PORT", os.getenv("WEB_PORT", "10000")))
     WEB_LOG_LEVEL = os.getenv("WEB_LOG_LEVEL", "info")
-    ACCESS_LOG = os.getenv("ACCESS_LOG", "0")
 
     import importlib
     mod = importlib.import_module(app_ref[0])
@@ -107,7 +106,7 @@ async def _run_web() -> None:
     log.info("🌐 Serving web (uvicorn) on %s:%s", HOST, PORT)
     try:
         import uvicorn
-        config = uvicorn.Config(app=app, host=HOST, port=PORT, log_level=WEB_LOG_LEVEL, access_log=(ACCESS_LOG != "0"), lifespan="off")
+        config = uvicorn.Config(app=app, host=HOST, port=PORT, log_level=WEB_LOG_LEVEL, lifespan="auto")
         server = uvicorn.Server(config)
         await server.serve()
     except asyncio.CancelledError:
