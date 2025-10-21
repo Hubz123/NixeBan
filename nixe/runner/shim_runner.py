@@ -1,8 +1,8 @@
+
 from __future__ import annotations
 import os
 import logging
 import asyncio
-import inspect
 from typing import Optional
 
 import discord
@@ -17,29 +17,35 @@ def _read_token() -> Optional[str]:
             return v
     return None
 
+def _prefix() -> str:
+    p = os.getenv("COMMAND_PREFIX")
+    return p if p else "!"
+
 def create_bot() -> commands.Bot:
     intents = discord.Intents.default()
-    intents.message_content = True  # required for on_message guards
-    bot = commands.Bot(command_prefix=os.getenv("NIXE_PREFIX", "!"), intents=intents)
+    intents.message_content = True
+    bot = commands.Bot(command_prefix=_prefix(), intents=intents)
     return bot
 
 async def _maybe_load_extension(bot: commands.Bot, name: str) -> None:
     try:
-        ret = bot.load_extension(name)
-        if inspect.isawaitable(ret):
-            await ret
-        log.info("Loaded extension: %s", name)
+        await bot.load_extension(name)
+        # Log using the exact loader logger for consistent output
+        logging.getLogger("nixe.cogs_loader").info("✅ Loaded cog: %s", name)
     except commands.ExtensionAlreadyLoaded:
-        log.debug("Extension already loaded: %s", name)
-    except Exception:
-        log.warning("[shim_runner] failed to load %s", name, exc_info=True)
+        logging.getLogger("nixe.cogs_loader").info("✅ Loaded cog: %s", name)
+    except Exception as e:
+        log.exception("Failed to load extension %s: %s", name, e)
 
-async def start_discord_bot() -> None:
+async def start_bot():
     token = _read_token()
     bot = create_bot()
 
-    # Load cogs loader extension; it will auto-load all cogs on_ready
-    await _maybe_load_extension(bot, "nixe.cogs.cogs_loader")
+    # Load crucial display/handlers first
+    await _maybe_load_extension(bot, "nixe.discord.handlers_crucial")
+
+    # Load our loader that will auto-load all cogs (uses nixe.cogs_loader logger)
+    await _maybe_load_extension(bot, "nixe.cogs_loader")
 
     if not token:
         log.error("[shim_runner] DISCORD_TOKEN / BOT_TOKEN not set; Discord bot will not start.")

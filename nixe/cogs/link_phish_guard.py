@@ -1,5 +1,9 @@
 from __future__ import annotations
-import os, re, json, logging
+import logging
+try:
+    LINK_DB_MARKER
+except NameError:
+    LINK_DB_MARKER = '[link-phish-blacklist-db]'  # fallback marker
 from typing import List, Set
 import discord
 from discord.ext import commands

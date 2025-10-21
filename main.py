@@ -96,8 +96,44 @@ async def amain() -> None:
             break
         await asyncio.sleep(1.0)
 
+
+# --- Injected concurrent runner (non-blocking web+bot) ---
+async def amain_concurrent():
+    import asyncio
+    import logging
+    from nixe.runner import shim_runner
+    log = logging.getLogger("entry.main")
+
+    log.info("🤖 Starting NIXE multiprocess (Discord + Web)...")
+
+    log.info("Starting Uvicorn web server...")
+    web_task = asyncio.create_task(run_uvicorn(), name="uvicorn-server")
+
+    log.info("Starting Discord bot task...")
+    bot_task = asyncio.create_task(shim_runner.start_bot(), name="discord-bot")
+
+    try:
+        done, pending = await asyncio.wait({web_task, bot_task}, return_when=asyncio.FIRST_EXCEPTION)
+    except asyncio.CancelledError:
+        # graceful shutdown
+        done, pending = set(), {web_task, bot_task}
+
+    crashed = False
+    for t in done:
+        exc = t.exception()
+        if exc:
+            crashed = True
+            log.error("Background task crashed: %r", exc, exc_info=True)
+
+    if crashed:
+        for t in pending:
+            t.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+# --- End injected ---
+
+
 if __name__ == "__main__":
     try:
-        asyncio.run(amain())
+        asyncio.run(amain_concurrent())
     except KeyboardInterrupt:
         log.info("Shutdown requested by user.")

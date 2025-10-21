@@ -33,7 +33,7 @@ def patch_file(path: Path) -> bool:
     # Replace the first 'def _get_inbox_thread(self, ch):' with 'async def ...'
     s = re.sub(
         r"(^|\n)(?!async\s+)def\s+_get_inbox_thread\s*\(\s*self\s*,\s*ch\s*\)\s*:",
-        r"\1async def _get_inbox_thread(self, ch):",
+        r"async def _get_inbox_thread(self, ch):",
         s,
         flags=re.M
     )

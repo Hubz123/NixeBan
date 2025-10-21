@@ -36,7 +36,7 @@ def main():
     #    Do not double-insert 'async' if already there
     s = re.sub(
         r"\n(def\s+_get_inbox_thread\s*\(\s*self\s*,\s*ch\s*\)\s*:\s*)",
-        "\nasync \\1",
+        "\nasync \",
         s,
         count=1
     )
