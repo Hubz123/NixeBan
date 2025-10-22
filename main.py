@@ -10,7 +10,7 @@ log = logging.getLogger("entry.main")
 
 async def run_uvicorn() -> None:
     # Run ASGI: nixe.web.asgi:app
-    config = uvicorn.Config("nixe.web.asgi:app", host=settings().HOST, port=settings().PORT, log_level="info", workers=1)
+    config = uvicorn.Config("nixe.web.asgi:app", host=settings().HOST, port=settings().PORT, log_level="warning", workers=1, access_log=settings().ACCESS_LOG)
     server = uvicorn.Server(config)
     await server.serve()
 

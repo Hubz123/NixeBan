@@ -33,6 +33,7 @@ class Settings:
     HOST: str = os.getenv("HOST", "0.0.0.0")
     PORT: int = int(os.getenv("PORT", "10000"))
     LOG_CHANNEL_ID: Optional[int] = int(os.getenv("LOG_CHANNEL_ID")) if os.getenv("LOG_CHANNEL_ID") else None
+    ACCESS_LOG: bool = os.getenv("ACCESS_LOG", "0") not in {"0", "false", "False"}
     # Discord tokens (multiple env names supported)
     DISCORD_TOKEN: Optional[str] = os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN") or os.getenv("DISCORD_BOT_TOKEN")
     # Extra
