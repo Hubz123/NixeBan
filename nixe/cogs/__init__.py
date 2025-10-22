@@ -1,1 +1,1 @@
-# nixe.cogs package
+# package
