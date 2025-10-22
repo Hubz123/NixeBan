@@ -17,6 +17,7 @@ def _discover(base: str = "nixe.cogs"):
         if mod.startswith("_"):
             continue
         if "cogs_loader" in name:
+            # internal skip: never attempt to load loader modules themselves
             continue
         if name in EXCLUDE or mod in EXCLUDE:
             log.info("[loader] excluded by COG_EXCLUDE: %s", name)
@@ -40,6 +41,7 @@ class NixeCogsLoader(commands.Cog):
     async def _load_all(self) -> None:
         for ext in _discover("nixe.cogs"):
             await self._try_load(ext)
+        # signal "cogs loaded" AFTER auto-discovery completes
         mark_cogs_loaded()
 
     @commands.Cog.listener()

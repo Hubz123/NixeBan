@@ -1,5 +1,1 @@
-
-from __future__ import annotations
-# Internal package main is not used by runtime; retained for compatibility.
-def main() -> None:
-    return
+import os\nfrom __future__ import annotations\nimport os\nimport asyncio, os\n\nasync def start_bot():\n    # bridge to shim_runner\n    from nixe.discord.shim_runner import start_bot as _start\n    token = os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN") or ""\n    return await _start(token)\n\ndef main():\n    # sync entry for old scripts\n    asyncio.run(start_bot())\n\nif __name__ == "__main__":\n    main()

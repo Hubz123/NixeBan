@@ -1,15 +1,19 @@
 
 from __future__ import annotations
-import os, logging, discord
+import os
+import logging
+import discord
 from discord.ext import commands
 from nixe.helpers.bootstate import wait_cogs_loaded
 
 log = logging.getLogger("nixe.discord.handlers_crucial")
 
 def _user_tag(u: discord.ClientUser | discord.User | None) -> str:
-    if not u: return "Nixe#0000"
+    if not u:
+        return "Nixe#0000"
     discr = getattr(u, "discriminator", None)
-    if discr and discr != "0": return f"{getattr(u, 'name', 'Nixe')}#{discr}"
+    if discr and discr != "0":
+        return f"{getattr(u, 'name', 'Nixe')}#{discr}"
     return getattr(u, "name", "Nixe")
 
 class NixeHandlersCrucial(commands.Cog):
@@ -19,7 +23,9 @@ class NixeHandlersCrucial(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        if self._printed: return
+        if self._printed:
+            return
+        # Wait a moment until auto-discovered cogs are loaded, but don't block too long
         await wait_cogs_loaded(5.0)
         self._printed = True
         log.info("🧩 Cogs loaded (core + autodiscover).")
@@ -29,5 +35,6 @@ class NixeHandlersCrucial(commands.Cog):
         log.info("🌐 Mode: %s", mode)
 
 async def setup(bot: commands.Bot):
-    if 'NixeHandlersCrucial' in bot.cogs: return
+    if 'NixeHandlersCrucial' in bot.cogs:
+        return
     await bot.add_cog(NixeHandlersCrucial(bot))
