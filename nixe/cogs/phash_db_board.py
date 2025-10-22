@@ -9,7 +9,7 @@ log = logging.getLogger("nixe.cogs.phash_db_board")
 
 # ===== Defaults (baked-in) =====
 DB_THREAD_ID = int(os.getenv("PHASH_DB_THREAD_ID", "1430048839556927589"))
-# Sumber PIN (bisa Thread atau Channel) — default ke log-botphising:
+# Sumber PIN (bisa Thread atau Channel) â default ke log-botphising:
 PIN_SOURCE_ID = int(os.getenv("PHASH_PIN_SOURCE_ID", os.getenv("PHASH_PIN_SOURCE_THREAD_ID", "1400375184048787566")))
 SOURCE_THREAD_ID = int(os.getenv("PHASH_SOURCE_THREAD_ID", "1409949797313679492"))  # imagephish (fallback)
 SOURCE_CHANNEL_ID = int(os.getenv("PHASH_SOURCE_CHANNEL_ID", "0"))
@@ -21,7 +21,7 @@ SCAN_LIMIT = int(os.getenv("PHASH_DB_SCAN_LIMIT", "12000"))
 MAX_BYTES = int(os.getenv("PHASH_DB_MAX_BYTES", "1800"))
 EDIT_MIN_INTERVAL = int(os.getenv("PHASH_BOARD_EDIT_MIN_INTERVAL", "20"))
 
-HEX16 = re.compile(r"\b[0-9a-f]{16}\b")
+HEX16 = re.compile(r"[0-9a-f]{16}")
 
 def _is_board_message(msg: discord.Message) -> bool:
     c = (msg.content or "")
@@ -42,30 +42,19 @@ async def _ensure_unarchived(th: discord.Thread) -> None:
         pass
 
 def _render_json(tokens: List[str]) -> str:
-    head = f"{TITLE}\n\n```json\n{{\n\"{JSON_KEY}\": [\n"
-    body_lines = [f"\"{t}\"," for t in tokens]
-    if body_lines:
-        body_lines[-1] = body_lines[-1].rstrip(",")
-    tail = "\n]\n}\n```"
-    content = head + "\n".join(body_lines) + tail
-    if len(content) > MAX_BYTES:
-        lo, hi, best = 0, len(tokens), 0
-        while lo <= hi:
-            mid = (lo + hi) // 2
-            trial_lines = [f"\"{t}\"," for t in tokens[:max(mid-1,0)]]
-            if mid > 0:
-                trial_lines += [f"\"{tokens[mid-1]}\""]
-            trial = head + "\n".join(trial_lines) + tail
-            if len(trial) <= MAX_BYTES:
-                best = mid; lo = mid + 1
-            else:
-                hi = mid - 1
-        use = tokens[:best]
-        body = [f"\"{t}\"," for t in use]
-        if body: body[-1] = body[-1].rstrip(",")
-        content = head + "\n".join(body) + tail
+    title = f"{TITLE}\n"
+    arr = ",\n".join([f"    \"{t}\"" for t in tokens])
+    content = (
+        title +
+        "```json\n" +
+        "{\n" +
+        f"  \"{JSON_KEY}\": [\n" +
+        f"{arr}\n" +
+        "  ]\n" +
+        "}\n" +
+        "```"
+    )
     return content
-
 async def _read_pinned_json(chan: Union[discord.Thread, discord.TextChannel]) -> List[str]:
     """Parse all pinned messages in `chan` and extract 16-hex tokens."""
     try:
@@ -137,11 +126,10 @@ class PhashDbBoard(commands.Cog):
                 try: await m.pin(reason="Pin pHash JSON board")
                 except Exception: pass
                 return
-        placeholder = f"{TITLE}\n\n```json\n{{\"{JSON_KEY}\": []}}\n```"
-        created = await self._db.send(content=placeholder + f"\n{BOARD_TAG}")
-        try: await created.pin(reason="Pin pHash JSON board")
-        except Exception: pass
+        placeholder = f"{TITLE}\n```json\n{{\"{JSON_KEY}\": []}}\n```"
+        created = await self._db.send(content=placeholder + f" {BOARD_TAG}")
         self._msg = created
+        return
 
     async def _gather_tokens(self) -> List[str]:
         tokens: Set[str] = set()
@@ -162,7 +150,7 @@ class PhashDbBoard(commands.Cog):
                 buf.append(t)
             _collect_tokens(buf, tokens)
 
-        # Order stabil: berdasarkan kemunculan pertama di pin_src → db → lainnya
+        # Order stabil: berdasarkan kemunculan pertama di pin_src â db â lainnya
         order: List[str] = []
         seen: Set[str] = set()
 
@@ -193,7 +181,7 @@ class PhashDbBoard(commands.Cog):
             if not force and toks == self._last_tokens:
                 return  # nothing changed
 
-            content = _render_json(toks) + f"\n{BOARD_TAG}"
+            content = _render_json(toks) + f" {BOARD_TAG}"
             if self._msg.content == content and not force:
                 self._last_tokens = toks
                 self._last_edit_ts = now
@@ -228,3 +216,18 @@ class PhashDbBoard(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(PhashDbBoard(bot))
+def _render_json(tokens: List[str]) -> str:
+    title = f"{TITLE}\n"
+    body_lines = [f"    \"{t}\"" for t in tokens]
+    arr = ",\n".join(body_lines)
+    content = (
+        title +
+        "```json\n" +
+        "{\n" +
+        f"  \"{JSON_KEY}\": [\n" +
+        f"{arr}\n" +
+        "  ]\n" +
+        "}\n" +
+        "```"
+    )
+    return content
