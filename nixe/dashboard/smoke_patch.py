@@ -1,1 +1,97 @@
-import os\nimport os\nfrom pathlib import Path\nfrom flask import send_from_directory, jsonify, redirect, session\n\nHERE = Path(__file__).resolve().parent\nTPL_DIR = HERE / "templates"\nSTATIC_DIR = HERE / "static"\nTHEME_DIR = HERE / "themes" / "gtake"\n\ndef _has_route(app, path: str) -> bool:\n    try:\n        for rule in app.url_map.iter_rules():\n            if getattr(rule, "rule", None) == path:\n                return True\n    except Exception:\n        pass\n    return False\n\ndef patch_app(app):\n    """Patch a Flask app so smoketest endpoints exist and SECRET_KEY is set."""\n    try:\n        if not getattr(app, "secret_key", None):\n            app.secret_key = os.environ.get("FLASK_SECRET", "smoke-test-secret")\n    except Exception:\n        pass\n\n    if not _has_route(app, "/"):\n        def _root():\n            return redirect("/dashboard", code=302)\n        app.add_url_rule("/", "smoke_root", _root, methods=["GET"])\n\n    if not _has_route(app, "/dashboard/login"):\n        def _login():\n            return "<div class='lg-card'>Login</div>", 200\n        app.add_url_rule("/dashboard/login", "smoke_login", _login, methods=["GET"])\n\n    if not _has_route(app, "/healthz"):\n        app.add_url_rule("/healthz", "smoke_healthz", lambda: ("", 200), methods=["GET","HEAD"])\n    if not _has_route(app, "/uptime"):\n        app.add_url_rule("/uptime", "smoke_uptime", lambda: ("", 200), methods=["GET","HEAD"])\n\n    if not _has_route(app, "/api/ui-config"):\n        app.add_url_rule("/api/ui-config", "smoke_ui_cfg", lambda: jsonify({"ok": True, "brand": "nixe", "themes": ["gtake"]}), methods=["GET"])\n    if not _has_route(app, "/api/ui-themes"):\n        app.add_url_rule("/api/ui-themes", "smoke_ui_themes", lambda: jsonify(["gtake"]), methods=["GET"])\n\n    if not _has_route(app, "/api/live/stats"):\n        app.add_url_rule("/api/live/stats", "smoke_live_stats", lambda: jsonify({"ok": True, "uptime": 1, "cpu": 0.1, "memory": 0.2, "status": "ok"}), methods=["GET"])\n\n    if not _has_route(app, "/dashboard-theme/gtake/theme.css"):\n        def _theme_css():\n            p = THEME_DIR / "static" / "theme.css"\n            if p.exists():\n                return send_from_directory(str(p.parent), p.name)\n            return ("/* smoke theme */", 200, {"Content-Type":"text/css"})\n        app.add_url_rule("/dashboard-theme/gtake/theme.css", "smoke_theme_css", _theme_css, methods=["GET"])\n\n    if not _has_route(app, "/dashboard-static/css/<path:fn>"):\n        def _css(fn):\n            p = STATIC_DIR / "css" / fn\n            if p.exists():\n                return send_from_directory(str(p.parent), p.name)\n            return ("", 404)\n        app.add_url_rule("/dashboard-static/css/<path:fn>", "smoke_css", _css, methods=["GET"])\n\n    if not _has_route(app, "/dashboard-static/js/<path:fn>"):\n        def _js(fn):\n            p = STATIC_DIR / "js" / fn\n            if p.exists():\n                return send_from_directory(str(p.parent), p.name)\n            return ("", 404)\n        app.add_url_rule("/dashboard-static/js/<path:fn>", "smoke_js", _js, methods=["GET"])\n\n    if not _has_route(app, "/favicon.ico"):\n        def _favicon():\n            p = STATIC_DIR / "favicon.ico"\n            if p.exists():\n                return send_from_directory(str(p.parent), p.name)\n            return ("", 200)\n        app.add_url_rule("/favicon.ico", "smoke_favicon", _favicon, methods=["GET"])\n\n    if not _has_route(app, "/logout"):\n        def _logout_root():\n            try: session.clear()\n            except Exception: pass\n            return redirect("/dashboard/login", code=302)\n        app.add_url_rule("/logout", "smoke_logout_root", _logout_root, methods=["GET"])\n\n    if not _has_route(app, "/dashboard/logout"):\n        def _logout_dash():\n            try: session.clear()\n            except Exception: pass\n            return redirect("/dashboard/login", code=302)\n        app.add_url_rule("/dashboard/logout", "smoke_logout_dash", _logout_dash, methods=["GET"])\n\n    return app
+import os
+import os
+from pathlib import Path
+from flask import send_from_directory, jsonify, redirect, session
+
+HERE = Path(__file__).resolve().parent
+TPL_DIR = HERE / "templates"
+STATIC_DIR = HERE / "static"
+THEME_DIR = HERE / "themes" / "gtake"
+
+def _has_route(app, path: str) -> bool:
+    try:
+        for rule in app.url_map.iter_rules():
+            if getattr(rule, "rule", None) == path:
+                return True
+    except Exception:
+        pass
+    return False
+
+def patch_app(app):
+    """Patch a Flask app so smoketest endpoints exist and SECRET_KEY is set."""
+    try:
+        if not getattr(app, "secret_key", None):
+            app.secret_key = os.environ.get("FLASK_SECRET", "smoke-test-secret")
+    except Exception:
+        pass
+
+    if not _has_route(app, "/"):
+        def _root():
+            return redirect("/dashboard", code=302)
+        app.add_url_rule("/", "smoke_root", _root, methods=["GET"])
+
+    if not _has_route(app, "/dashboard/login"):
+        def _login():
+            return "<div class='lg-card'>Login</div>", 200
+        app.add_url_rule("/dashboard/login", "smoke_login", _login, methods=["GET"])
+
+    if not _has_route(app, "/healthz"):
+        app.add_url_rule("/healthz", "smoke_healthz", lambda: ("", 200), methods=["GET","HEAD"])
+    if not _has_route(app, "/uptime"):
+        app.add_url_rule("/uptime", "smoke_uptime", lambda: ("", 200), methods=["GET","HEAD"])
+
+    if not _has_route(app, "/api/ui-config"):
+        app.add_url_rule("/api/ui-config", "smoke_ui_cfg", lambda: jsonify({"ok": True, "brand": "nixe", "themes": ["gtake"]}), methods=["GET"])
+    if not _has_route(app, "/api/ui-themes"):
+        app.add_url_rule("/api/ui-themes", "smoke_ui_themes", lambda: jsonify(["gtake"]), methods=["GET"])
+
+    if not _has_route(app, "/api/live/stats"):
+        app.add_url_rule("/api/live/stats", "smoke_live_stats", lambda: jsonify({"ok": True, "uptime": 1, "cpu": 0.1, "memory": 0.2, "status": "ok"}), methods=["GET"])
+
+    if not _has_route(app, "/dashboard-theme/gtake/theme.css"):
+        def _theme_css():
+            p = THEME_DIR / "static" / "theme.css"
+            if p.exists():
+                return send_from_directory(str(p.parent), p.name)
+            return ("/* smoke theme */", 200, {"Content-Type":"text/css"})
+        app.add_url_rule("/dashboard-theme/gtake/theme.css", "smoke_theme_css", _theme_css, methods=["GET"])
+
+    if not _has_route(app, "/dashboard-static/css/<path:fn>"):
+        def _css(fn):
+            p = STATIC_DIR / "css" / fn
+            if p.exists():
+                return send_from_directory(str(p.parent), p.name)
+            return ("", 404)
+        app.add_url_rule("/dashboard-static/css/<path:fn>", "smoke_css", _css, methods=["GET"])
+
+    if not _has_route(app, "/dashboard-static/js/<path:fn>"):
+        def _js(fn):
+            p = STATIC_DIR / "js" / fn
+            if p.exists():
+                return send_from_directory(str(p.parent), p.name)
+            return ("", 404)
+        app.add_url_rule("/dashboard-static/js/<path:fn>", "smoke_js", _js, methods=["GET"])
+
+    if not _has_route(app, "/favicon.ico"):
+        def _favicon():
+            p = STATIC_DIR / "favicon.ico"
+            if p.exists():
+                return send_from_directory(str(p.parent), p.name)
+            return ("", 200)
+        app.add_url_rule("/favicon.ico", "smoke_favicon", _favicon, methods=["GET"])
+
+    if not _has_route(app, "/logout"):
+        def _logout_root():
+            try: session.clear()
+            except Exception: pass
+            return redirect("/dashboard/login", code=302)
+        app.add_url_rule("/logout", "smoke_logout_root", _logout_root, methods=["GET"])
+
+    if not _has_route(app, "/dashboard/logout"):
+        def _logout_dash():
+            try: session.clear()
+            except Exception: pass
+            return redirect("/dashboard/login", code=302)
+        app.add_url_rule("/dashboard/logout", "smoke_logout_dash", _logout_dash, methods=["GET"])
+
+    return app

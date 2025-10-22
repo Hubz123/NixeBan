@@ -1,1 +1,4 @@
-import os\nfrom __future__ import annotations\nimport os\nfrom typing import Any\n\ndef _cfg_get(k: str, default=None):\n    try:\n        from nixe.config import load as _load_cfg  # type: ignore\n        cfg = _load_cfg()\n        if isinstance(cfg, dict):\n            return cfg.get(k, default)\n    except Exception:\n        pass\n    return default\n\nBOT_PREFIX = os.getenv("COMMAND_PREFIX") or _cfg_get("COMMAND_PREFIX", "!")\nBOT_TOKEN  = os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN") or _cfg_get("BOT_TOKEN","")\nFLASK_ENV  = os.getenv("FLASK_ENV", "production")\n\ntry:\n    LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID") or _cfg_get("BAN_LOG_CHANNEL_ID", 0) or 0)\nexcept Exception:\n    LOG_CHANNEL_ID = 0\nLOG_CHANNEL_NAME = os.getenv("LOG_CHANNEL_NAME") or _cfg_get("LOG_CHANNEL_NAME","")\n\nBOT_INTENTS = {\n    "guilds": True,\n    "members": True,\n    "presences": True,\n    "message_content": True,\n}
+
+from __future__ import annotations
+from nixe.config.env import settings, load_dotenv_verbose  # re-export
+__all__ = ["settings", "load_dotenv_verbose"]

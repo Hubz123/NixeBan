@@ -1,1 +1,89 @@
-import os\nimport os\nfrom pathlib import Path\nfrom flask import Flask, redirect, render_template, send_from_directory, jsonify, session\n\nHERE = Path(__file__).resolve().parent\nTPL_DIR = HERE / "templates"\nSTATIC_DIR = HERE / "static"\nTHEME_DIR = HERE / "themes" / "gtake"\n\ndef create_app(testing: bool = True):\n    app = Flask(\n        __name__,\n        template_folder=str(TPL_DIR),\n        static_folder=str(STATIC_DIR),\n        static_url_path="/dashboard-static",\n    )\n    app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET", "smoke-test-secret")\n    app.config["TESTING"] = testing\n\n    @app.route("/")\n    def root():\n        return redirect("/dashboard", code=302)\n\n    @app.route("/dashboard")\n    def dash():\n        return redirect("/dashboard/login", code=302)\n\n    @app.route("/dashboard/login")\n    def login():\n        tpl = TPL_DIR / "login.html"\n        if tpl.exists():\n            try:\n                return render_template("login.html")\n            except Exception:\n                pass\n        return "<div class='lg-card'>Login</div>", 200\n\n    @app.route("/healthz", methods=["GET", "HEAD"])\n    def healthz():\n        return ("", 200)\n\n    @app.route("/uptime", methods=["GET", "HEAD"])\n    def uptime():\n        return ("", 200)\n\n    @app.route("/api/ui-config")\n    def ui_cfg():\n        return jsonify({"ok": True, "brand": "nixe", "themes": ["gtake"]})\n\n    @app.route("/api/ui-themes")\n    def ui_themes():\n        return jsonify(["gtake"])\n\n    @app.route("/dashboard-theme/gtake/theme.css")\n    def theme_css():\n        p = THEME_DIR / "static" / "theme.css"\n        if p.exists():\n            return send_from_directory(str(p.parent), p.name)\n        return ("/* smoke theme */", 200, {"Content-Type":"text/css"})\n\n    @app.route("/api/live/stats")\n    def live_stats():\n        return jsonify({"ok": True, "uptime": 1, "cpu": 0.1, "memory": 0.2, "status": "ok"})\n\n    @app.route("/api/phish/phash")\n    def phash():\n        return ("", 404)\n\n    @app.route("/logout")\n    def logout_root():\n        try: session.clear()\n        except Exception: pass\n        return redirect("/dashboard/login", code=302)\n\n    @app.route("/dashboard/logout")\n    def logout_dash():\n        try: session.clear()\n        except Exception: pass\n        return redirect("/dashboard/login", code=302)\n\n    @app.route("/favicon.ico")\n    def favicon():\n        p = STATIC_DIR / "favicon.ico"\n        if p.exists():\n            return send_from_directory(str(p.parent), p.name)\n        return ("", 200)\n\n    return app
+import os
+import os
+from pathlib import Path
+from flask import Flask, redirect, render_template, send_from_directory, jsonify, session
+
+HERE = Path(__file__).resolve().parent
+TPL_DIR = HERE / "templates"
+STATIC_DIR = HERE / "static"
+THEME_DIR = HERE / "themes" / "gtake"
+
+def create_app(testing: bool = True):
+    app = Flask(
+        __name__,
+        template_folder=str(TPL_DIR),
+        static_folder=str(STATIC_DIR),
+        static_url_path="/dashboard-static",
+    )
+    app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET", "smoke-test-secret")
+    app.config["TESTING"] = testing
+
+    @app.route("/")
+    def root():
+        return redirect("/dashboard", code=302)
+
+    @app.route("/dashboard")
+    def dash():
+        return redirect("/dashboard/login", code=302)
+
+    @app.route("/dashboard/login")
+    def login():
+        tpl = TPL_DIR / "login.html"
+        if tpl.exists():
+            try:
+                return render_template("login.html")
+            except Exception:
+                pass
+        return "<div class='lg-card'>Login</div>", 200
+
+    @app.route("/healthz", methods=["GET", "HEAD"])
+    def healthz():
+        return ("", 200)
+
+    @app.route("/uptime", methods=["GET", "HEAD"])
+    def uptime():
+        return ("", 200)
+
+    @app.route("/api/ui-config")
+    def ui_cfg():
+        return jsonify({"ok": True, "brand": "nixe", "themes": ["gtake"]})
+
+    @app.route("/api/ui-themes")
+    def ui_themes():
+        return jsonify(["gtake"])
+
+    @app.route("/dashboard-theme/gtake/theme.css")
+    def theme_css():
+        p = THEME_DIR / "static" / "theme.css"
+        if p.exists():
+            return send_from_directory(str(p.parent), p.name)
+        return ("/* smoke theme */", 200, {"Content-Type":"text/css"})
+
+    @app.route("/api/live/stats")
+    def live_stats():
+        return jsonify({"ok": True, "uptime": 1, "cpu": 0.1, "memory": 0.2, "status": "ok"})
+
+    @app.route("/api/phish/phash")
+    def phash():
+        return ("", 404)
+
+    @app.route("/logout")
+    def logout_root():
+        try: session.clear()
+        except Exception: pass
+        return redirect("/dashboard/login", code=302)
+
+    @app.route("/dashboard/logout")
+    def logout_dash():
+        try: session.clear()
+        except Exception: pass
+        return redirect("/dashboard/login", code=302)
+
+    @app.route("/favicon.ico")
+    def favicon():
+        p = STATIC_DIR / "favicon.ico"
+        if p.exists():
+            return send_from_directory(str(p.parent), p.name)
+        return ("", 200)
+
+    return app

@@ -1,1 +1,8 @@
-import os\nfrom __future__ import annotations\nimport os\ntry:\n    import discord  # type: ignore\n    from ..helpers.once import once_sync as _once\n    _real_ban = discord.Guild.ban\n    async def _ban_once(self, user, *args, **kwargs):\n        ttl = int(os.getenv("BAN_DEDUP_TTL", "10"))\n        uid = getattr(user, "id", user)\n        key = f"ban:{self.id}:{uid}"\n        if not _once(key, ttl=ttl):\n            return  # duplicate within TTL; skip silently\n        return await _real_ban(self, user, *args, **kwargs)\n    discord.Guild.ban = _ban_once\nexcept Exception as e:\n    print("[WARN] ban dedupe patch not applied:", e)
+
+from __future__ import annotations
+def dedupe(items):
+    seen = set(); out = []
+    for x in items:
+        if x not in seen:
+            seen.add(x); out.append(x)
+    return out

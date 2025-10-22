@@ -1,57 +1,33 @@
 
 from __future__ import annotations
-import os
-import logging
-import asyncio
-from typing import Optional
-
+import logging, os, asyncio
 import discord
 from discord.ext import commands
+from nixe.config.env import settings
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("nixe.runner.shim_runner")
 
-def _read_token() -> Optional[str]:
-    for k in ("DISCORD_TOKEN", "DISCORD_BOT_TOKEN", "BOT_TOKEN"):
-        v = (os.getenv(k) or "").strip()
-        if v:
-            return v
-    return None
-
-def _prefix() -> str:
-    p = os.getenv("COMMAND_PREFIX")
-    return p if p else "!"
-
-def create_bot() -> commands.Bot:
-    intents = discord.Intents.default()
-    intents.message_content = True
-    bot = commands.Bot(command_prefix=_prefix(), intents=intents)
-    return bot
+def _get_token() -> str | None:
+    return settings().token()
 
 async def _maybe_load_extension(bot: commands.Bot, name: str) -> None:
     try:
         await bot.load_extension(name)
-        # Log using the exact loader logger for consistent output
-        logging.getLogger("nixe.cogs_loader").info("✅ Loaded cog: %s", name)
-    except commands.ExtensionAlreadyLoaded:
-        logging.getLogger("nixe.cogs_loader").info("✅ Loaded cog: %s", name)
-    except Exception as e:
-        log.exception("Failed to load extension %s: %s", name, e)
+    except Exception:
+        pass
 
 async def start_bot():
-    token = _read_token()
-    bot = create_bot()
+    intents = discord.Intents.default()
+    intents.message_content = True
+    bot = commands.Bot(command_prefix="!", intents=intents)
 
-    # Load crucial display/handlers first
+    # Load crucial handlers and loader
     await _maybe_load_extension(bot, "nixe.discord.handlers_crucial")
-
-    # Load our loader that will auto-load all cogs (uses nixe.cogs_loader logger)
     await _maybe_load_extension(bot, "nixe.cogs_loader")
 
+    token = _get_token()
     if not token:
-        log.error("[shim_runner] DISCORD_TOKEN / BOT_TOKEN not set; Discord bot will not start.")
-        # Keep task alive so main process continues (web can still run)
-        while True:
-            await asyncio.sleep(3600)
-    else:
-        log.info("[shim_runner] logging in using static token")
-        await bot.start(token)
+        raise RuntimeError("DISCORD_TOKEN / BOT_TOKEN missing in environment")
+    log.info("[shim_runner] logging in using static token")
+    print("INFO:discord.client: logging in using static token")  # keep legacy line
+    await bot.start(token)

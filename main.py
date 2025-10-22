@@ -1,136 +1,44 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-from __future__ import annotations
 
+from __future__ import annotations
 import asyncio
 import logging
-import logging.config
-import os
+import uvicorn
 
-# Load .env if present
-try:
-    from dotenv import load_dotenv, find_dotenv
-    _env = find_dotenv(usecwd=True) or ".env"
-    if _env and os.path.exists(_env):
-        load_dotenv(_env, override=False)
-        print(f"✅ Loaded env file: {_env}")
-except Exception:
-    pass
+from nixe.config.env import settings, load_dotenv_verbose
 
-def _setup_logging() -> None:
-    # Use the classic format: LEVEL:logger: message — ensures newline per record
-    fmt = "%(levelname)s:%(name)s: %(message)s"
-    level = os.getenv("LOG_LEVEL", "INFO").upper()
-    log_config = {
-        "version": 1,
-        "disable_existing_loggers": False,
-        "formatters": {
-            "standard": {"format": fmt},
-        },
-        "handlers": {
-            "console": {
-                "class": "logging.StreamHandler",
-                "formatter": "standard",
-                "stream": "ext://sys.stdout",
-            }
-        },
-        "loggers": {
-            # Root logger
-            "": {"handlers": ["console"], "level": level},
-            # Make discord/uvicorn obey the same format
-            "discord": {"level": level, "handlers": ["console"], "propagate": False},
-            "uvicorn": {"level": level, "handlers": ["console"], "propagate": False},
-            "uvicorn.error": {"level": level, "handlers": ["console"], "propagate": False},
-            "uvicorn.access": {"level": os.getenv("UVICORN_ACCESS_LEVEL", "INFO").upper(), "handlers": ["console"], "propagate": False},
-        },
-    }
-    logging.config.dictConfig(log_config)
-
-_setup_logging()
 log = logging.getLogger("entry.main")
 
 async def run_uvicorn() -> None:
-    import uvicorn
-    # Pass a compatible log_config so uvicorn uses the same format
-    fmt = "%(levelname)s:%(name)s: %(message)s"
-    level = os.getenv("LOG_LEVEL", "INFO").upper()
-    uvlog = {
-        "version": 1,
-        "disable_existing_loggers": False,
-        "formatters": {"standard": {"format": fmt}},
-        "handlers": {"default": {"class": "logging.StreamHandler", "formatter": "standard", "stream": "ext://sys.stdout"}},
-        "loggers": {
-            "uvicorn": {"handlers": ["default"], "level": level},
-            "uvicorn.error": {"handlers": ["default"], "level": level, "propagate": False},
-            "uvicorn.access": {"handlers": ["default"], "level": os.getenv("UVICORN_ACCESS_LEVEL", "INFO").upper(), "propagate": False},
-        },
-    }
-    log.info("Starting Uvicorn web server...")
-    config = uvicorn.Config(
-        "nixe.web.asgi:app",
-        host=os.getenv("HOST", "0.0.0.0"),
-        port=int(os.getenv("PORT", "10000")),
-        log_level=level.lower(),
-        lifespan="off",
-        log_config=uvlog,
-    )
+    # Run ASGI: nixe.web.asgi:app
+    config = uvicorn.Config("nixe.web.asgi:app", host=settings().HOST, port=settings().PORT, log_level="info", workers=1)
     server = uvicorn.Server(config)
     await server.serve()
 
-async def run_discord() -> None:
-    from nixe.runner.shim_runner import start_discord_bot
-    log.info("Starting Discord bot task...")
-    await start_discord_bot()
-
-async def amain() -> None:
-    log.info("🤖 Starting NIXE multiprocess (Discord + Web)...")
-    while True:
-        tasks = [asyncio.create_task(run_uvicorn()), asyncio.create_task(run_discord())]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        crashed = False
-        for res in results:
-            if isinstance(res, BaseException):
-                crashed = True
-                log.error("Background task crashed: %r", res, exc_info=True)
-        if not crashed:
-            break
-        await asyncio.sleep(1.0)
-
-
-# --- Injected concurrent runner (non-blocking web+bot) ---
-async def amain_concurrent():
-    import asyncio
-    import logging
+async def supervise_bot(log):
     from nixe.runner import shim_runner
-    log = logging.getLogger("entry.main")
+    while True:
+        try:
+            log.info("Starting Discord bot task...")
+            await shim_runner.start_bot()
+            log.warning("Discord bot task ended; restarting in 5s…")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.error("Discord bot crashed: %r", e, exc_info=True)
+        await asyncio.sleep(5)
 
+async def amain_concurrent():
+    load_dotenv_verbose()
     log.info("🤖 Starting NIXE multiprocess (Discord + Web)...")
-
     log.info("Starting Uvicorn web server...")
     web_task = asyncio.create_task(run_uvicorn(), name="uvicorn-server")
-
-    log.info("Starting Discord bot task...")
-    bot_task = asyncio.create_task(shim_runner.start_bot(), name="discord-bot")
-
-    try:
-        done, pending = await asyncio.wait({web_task, bot_task}, return_when=asyncio.FIRST_EXCEPTION)
-    except asyncio.CancelledError:
-        # graceful shutdown
-        done, pending = set(), {web_task, bot_task}
-
-    crashed = False
-    for t in done:
-        exc = t.exception()
-        if exc:
-            crashed = True
-            log.error("Background task crashed: %r", exc, exc_info=True)
-
-    if crashed:
-        for t in pending:
-            t.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
-# --- End injected ---
-
+    bot_task = asyncio.create_task(supervise_bot(log), name="discord-bot-supervisor")
+    # Keep web as the owning lifecycle so /healthz stays up
+    done, pending = await asyncio.wait({web_task}, return_when=asyncio.FIRST_COMPLETED)
+    # Cancel bot on shutdown
+    for t in pending:
+        t.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
 
 if __name__ == "__main__":
     try:

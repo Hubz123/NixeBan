@@ -1,1 +1,177 @@
-\nimport os\nimport os, time, json\nfrom pathlib import Path\nfrom flask import jsonify, redirect, send_from_directory, request\n\n# ---- healthz/ping log silencer ----\nimport logging\ndef _install_health_log_filter():\n    try:\n        class _HealthzFilter(logging.Filter):\n            def filter(self, record):\n                try:\n                    msg = record.getMessage()\n                except Exception:\n                    msg = str(record.msg)\n                return ("/healthz" not in msg) and ("/health" not in msg) and ("/ping" not in msg)\n        logging.getLogger("werkzeug").addFilter(_HealthzFilter())\n        logging.getLogger("gunicorn.access").addFilter(_HealthzFilter())\n    except Exception:\n        pass\n\n# ---- Dashboard extras: aliases, uploads, bans, static ----\ndef _register_dashboard_extras(app):\n    UPLOAD_DIR = Path(__file__).with_name("static") / "uploads"\n    try:\n        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)\n    except Exception:\n        pass\n\n    ALLOWED = {".png",".jpg",".jpeg",".gif",".svg",".webp"}\n\n    def _cfg_read():\n        ui = Path(__file__).with_name("ui_local.json")\n        try:\n            if ui.exists():\n                return json.loads(ui.read_text("utf-8"))\n        except Exception:\n            pass\n        return {}\n\n    def _cfg_write(d):\n        ui = Path(__file__).with_name("ui_local.json")\n        try:\n            ui.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")\n        except Exception:\n            pass\n\n    @app.post("/dashboard/settings/upload")\n    def _settings_upload():\n        f = request.files.get("file")\n        kind = (request.form.get("type") or "").strip().lower()\n        if not f or not kind:\n            return jsonify({"ok": False, "error": "file/type required"}), 400\n        ext = os.path.splitext(f.filename or "")[1].lower()\n        if ext not in ALLOWED:\n            return jsonify({"ok": False, "error":"bad file type"}), 400\n        name = f"{int(time.time())}_{(f.filename or 'file').replace(' ','_')}"\n        path = UPLOAD_DIR / name\n        try:\n            f.save(path)\n        except Exception as e:\n            return jsonify({"ok": False, "error": str(e)}), 500\n        url = f"/dashboard-static/uploads/{name}"\n        cfg = _cfg_read()\n        if kind == "logo": cfg["logo"] = url\n        if kind == "background": cfg["bg_url"] = url\n        _cfg_write(cfg)\n        return jsonify({"ok": True, "url": url})\n\n    @app.get("/dashboard-static/uploads/<path:fname>")\n    def _static_uploads(fname):\n        return send_from_directory(str(UPLOAD_DIR), fname)\n\n    @app.get("/dashboard/api/metrics")\n    def _api_metrics():\n        # Try call handler /api/live/stats jika ada\n        vf = app.view_functions.get("api_live_stats")\n        if vf:\n            try:\n                return vf()\n            except Exception:\n                pass\n        return jsonify({\n            "guilds": 0, "members": 0, "channels": 0, "threads": 0,\n            "online": 0, "latency_ms": 0, "updated": int(time.time())\n        })\n\n    @app.get("/dashboard/tasks")\n    def _alias_tasks():\n        return redirect("/dashboard", code=302)\n\n    @app.get("/dashboard/options")\n    def _alias_options():\n        return redirect("/dashboard/settings", code=302)\n\n    @app.get("/dashboard/api/bans")\n    def _api_bans():\n        limit = int((request.args.get("limit") or 10))\n        cands = [\n            Path("data/mod/ban_log.json"),\n            Path("data/ban_log.json"),\n            Path("data/mod/bans.json"),\n        ]\n        recs = []\n        for p in cands:\n            try:\n                if p.exists():\n                    data = json.loads(p.read_text("utf-8"))\n                    if isinstance(data, dict) and "items" in data: data = data["items"]\n                    if isinstance(data, list): recs.extend(data)\n            except Exception:\n                pass\n        def norm(x):\n            user = x.get("user") or x.get("username") or x.get("tag") or ""\n            uid  = x.get("user_id") or x.get("id")\n            when = x.get("when") or ""\n            if not when:\n                ts = x.get("ts") or x.get("timestamp") or x.get("time")\n                try:\n                    from datetime import datetime, timezone, timedelta\n                    if isinstance(ts, (int,float)):\n                        wib = datetime.fromtimestamp(int(ts), tz=timezone.utc) + timedelta(hours=7)\n                    else:\n                        wib = datetime.fromisoformat(str(ts).replace("Z","+00:00")) + timedelta(hours=7)\n                    when = wib.strftime("%A, %d/%m/%y")\n                except Exception:\n                    when = ""\n            return {"user": user, "user_id": uid, "when_str": when}\n        recs = [norm(r) for r in recs][-limit:]\n        return jsonify(recs)\n\n# === SATPAM PATCH (APPEND-ONLY) — jangan hapus kode di atas ===\nimport os as _satp_os\nfrom flask import Response as _satp_Response\n\ndef _satp_route_exists(_app, _path: str) -> bool:\n    try:\n        for r in _app.url_map.iter_rules():\n            if r.rule == _path:\n                return True\n    except Exception:\n        pass\n    return False\n\ndef _satp_bind_health(_app):\n    # /healthz\n    if not _satp_route_exists(_app, "/healthz"):\n        @_app.route("/healthz", methods=["GET","HEAD"])\n        def __satp_healthz_ok():\n            return _satp_Response(status=200)\n    # /uptime\n    if not _satp_route_exists(_app, "/uptime"):\n        @_app.route("/uptime", methods=["GET","HEAD"])\n        def __satp_uptime_ok():\n            return _satp_Response(status=200)\n    # alias /login -> /dashboard/login (biar gak 404)\n    if not _satp_route_exists(_app, "/login"):\n        @_app.get("/login")\n        def __satp_login_alias():\n            from flask import redirect, url_for\n            return redirect(url_for("dashboard.login"))\n\n# panggil ke instance app yang sudah ada di file kamu\ntry:\n    _satp_bind_health(app)\nexcept NameError:\n    pass\n\n# kalau file ini dijalankan langsung, tetap hormati PORT\nif __name__ == "__main__":\n    try:\n        _satp_port = int(_satp_os.getenv("PORT", "10000"))\n        app.run(host="0.0.0.0", port=_satp_port, debug=False)\n    except Exception:\n        pass\n# === END PATCH ===
+
+import os
+import os, time, json
+from pathlib import Path
+from flask import jsonify, redirect, send_from_directory, request
+
+# ---- healthz/ping log silencer ----
+import logging
+def _install_health_log_filter():
+    try:
+        class _HealthzFilter(logging.Filter):
+            def filter(self, record):
+                try:
+                    msg = record.getMessage()
+                except Exception:
+                    msg = str(record.msg)
+                return ("/healthz" not in msg) and ("/health" not in msg) and ("/ping" not in msg)
+        logging.getLogger("werkzeug").addFilter(_HealthzFilter())
+        logging.getLogger("gunicorn.access").addFilter(_HealthzFilter())
+    except Exception:
+        pass
+
+# ---- Dashboard extras: aliases, uploads, bans, static ----
+def _register_dashboard_extras(app):
+    UPLOAD_DIR = Path(__file__).with_name("static") / "uploads"
+    try:
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+    ALLOWED = {".png",".jpg",".jpeg",".gif",".svg",".webp"}
+
+    def _cfg_read():
+        ui = Path(__file__).with_name("ui_local.json")
+        try:
+            if ui.exists():
+                return json.loads(ui.read_text("utf-8"))
+        except Exception:
+            pass
+        return {}
+
+    def _cfg_write(d):
+        ui = Path(__file__).with_name("ui_local.json")
+        try:
+            ui.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    @app.post("/dashboard/settings/upload")
+    def _settings_upload():
+        f = request.files.get("file")
+        kind = (request.form.get("type") or "").strip().lower()
+        if not f or not kind:
+            return jsonify({"ok": False, "error": "file/type required"}), 400
+        ext = os.path.splitext(f.filename or "")[1].lower()
+        if ext not in ALLOWED:
+            return jsonify({"ok": False, "error":"bad file type"}), 400
+        name = f"{int(time.time())}_{(f.filename or 'file').replace(' ','_')}"
+        path = UPLOAD_DIR / name
+        try:
+            f.save(path)
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+        url = f"/dashboard-static/uploads/{name}"
+        cfg = _cfg_read()
+        if kind == "logo": cfg["logo"] = url
+        if kind == "background": cfg["bg_url"] = url
+        _cfg_write(cfg)
+        return jsonify({"ok": True, "url": url})
+
+    @app.get("/dashboard-static/uploads/<path:fname>")
+    def _static_uploads(fname):
+        return send_from_directory(str(UPLOAD_DIR), fname)
+
+    @app.get("/dashboard/api/metrics")
+    def _api_metrics():
+        # Try call handler /api/live/stats jika ada
+        vf = app.view_functions.get("api_live_stats")
+        if vf:
+            try:
+                return vf()
+            except Exception:
+                pass
+        return jsonify({
+            "guilds": 0, "members": 0, "channels": 0, "threads": 0,
+            "online": 0, "latency_ms": 0, "updated": int(time.time())
+        })
+
+    @app.get("/dashboard/tasks")
+    def _alias_tasks():
+        return redirect("/dashboard", code=302)
+
+    @app.get("/dashboard/options")
+    def _alias_options():
+        return redirect("/dashboard/settings", code=302)
+
+    @app.get("/dashboard/api/bans")
+    def _api_bans():
+        limit = int((request.args.get("limit") or 10))
+        cands = [
+            Path("data/mod/ban_log.json"),
+            Path("data/ban_log.json"),
+            Path("data/mod/bans.json"),
+        ]
+        recs = []
+        for p in cands:
+            try:
+                if p.exists():
+                    data = json.loads(p.read_text("utf-8"))
+                    if isinstance(data, dict) and "items" in data: data = data["items"]
+                    if isinstance(data, list): recs.extend(data)
+            except Exception:
+                pass
+        def norm(x):
+            user = x.get("user") or x.get("username") or x.get("tag") or ""
+            uid  = x.get("user_id") or x.get("id")
+            when = x.get("when") or ""
+            if not when:
+                ts = x.get("ts") or x.get("timestamp") or x.get("time")
+                try:
+                    from datetime import datetime, timezone, timedelta
+                    if isinstance(ts, (int,float)):
+                        wib = datetime.fromtimestamp(int(ts), tz=timezone.utc) + timedelta(hours=7)
+                    else:
+                        wib = datetime.fromisoformat(str(ts).replace("Z","+00:00")) + timedelta(hours=7)
+                    when = wib.strftime("%A, %d/%m/%y")
+                except Exception:
+                    when = ""
+            return {"user": user, "user_id": uid, "when_str": when}
+        recs = [norm(r) for r in recs][-limit:]
+        return jsonify(recs)
+
+# === SATPAM PATCH (APPEND-ONLY) — jangan hapus kode di atas ===
+import os as _satp_os
+from flask import Response as _satp_Response
+
+def _satp_route_exists(_app, _path: str) -> bool:
+    try:
+        for r in _app.url_map.iter_rules():
+            if r.rule == _path:
+                return True
+    except Exception:
+        pass
+    return False
+
+def _satp_bind_health(_app):
+    # /healthz
+    if not _satp_route_exists(_app, "/healthz"):
+        @_app.route("/healthz", methods=["GET","HEAD"])
+        def __satp_healthz_ok():
+            return _satp_Response(status=200)
+    # /uptime
+    if not _satp_route_exists(_app, "/uptime"):
+        @_app.route("/uptime", methods=["GET","HEAD"])
+        def __satp_uptime_ok():
+            return _satp_Response(status=200)
+    # alias /login -> /dashboard/login (biar gak 404)
+    if not _satp_route_exists(_app, "/login"):
+        @_app.get("/login")
+        def __satp_login_alias():
+            from flask import redirect, url_for
+            return redirect(url_for("dashboard.login"))
+
+# panggil ke instance app yang sudah ada di file kamu
+try:
+    _satp_bind_health(app)
+except NameError:
+    pass
+
+# kalau file ini dijalankan langsung, tetap hormati PORT
+if __name__ == "__main__":
+    try:
+        _satp_port = int(_satp_os.getenv("PORT", "10000"))
+        app.run(host="0.0.0.0", port=_satp_port, debug=False)
+    except Exception:
+        pass
+# === END PATCH ===
