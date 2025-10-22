@@ -3,6 +3,22 @@ from __future__ import annotations
 import asyncio, logging, sys
 # Ensure INFO-level logs are visible on Render
 logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s', stream=sys.stdout)
+
+
+# Hide only /healthz in access logs; keep all other logs visible
+def _install_healthz_log_filter():
+    import logging as _logging
+    class _HealthzFilter(_logging.Filter):
+        def filter(self, record):
+            try:
+                msg = record.getMessage()
+            except Exception:
+                msg = str(record)
+            return '/healthz' not in msg and 'GET /healthz' not in msg and '"/healthz"' not in msg
+    _logging.getLogger('uvicorn.access').addFilter(_HealthzFilter())
+    _logging.getLogger('uvicorn.error').addFilter(_HealthzFilter())
+    _logging.getLogger('werkzeug').addFilter(_HealthzFilter())
+
 import uvicorn
 from nixe.config.env import settings, load_dotenv_verbose
 
@@ -33,8 +49,8 @@ async def supervise_bot(logger):
             logger.error("Discord bot crashed: %r", e, exc_info=True)
         await asyncio.sleep(5)
 
-async def amain_concurrent():
-    load_dotenv_verbose()
+async \1
+    _install_healthz_log_filter()
     log.info("🤖 Starting NIXE multiprocess (Discord + Web)...")
     log.info("Starting Uvicorn web server...")
     web_task = asyncio.create_task(run_uvicorn(), name="uvicorn-server")
