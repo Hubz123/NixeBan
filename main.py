@@ -1,6 +1,8 @@
 
 from __future__ import annotations
-import asyncio, logging
+import asyncio, logging, sys
+# Ensure INFO-level logs are visible on Render
+logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s', stream=sys.stdout)
 import uvicorn
 from nixe.config.env import settings, load_dotenv_verbose
 
@@ -11,7 +13,7 @@ async def run_uvicorn() -> None:
         "nixe.web.asgi:app",
         host=settings().HOST,
         port=settings().PORT,
-        log_level="warning",
+        log_level="info",
         workers=1,
         access_log=settings().ACCESS_LOG,
     )
