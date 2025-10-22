@@ -75,9 +75,10 @@ async def amain_concurrent() -> None:
     web_task = asyncio.create_task(supervise_web(log), name='uvicorn-supervisor')
     bot_task = asyncio.create_task(supervise_bot(log), name='discord-bot-supervisor')
 
-    # Keep process alive until a termination signal cancels us
+    # Keep process alive until terminated; avoid awaiting web_task directly (prevents CancelledError)
+    stop = asyncio.Event()
     try:
-        await asyncio.Event().wait()
+        await stop.wait()
     except asyncio.CancelledError:
         pass
     finally:
