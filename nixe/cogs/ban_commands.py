@@ -17,9 +17,9 @@ class BanCommands(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-    @commands.command(name="testban", aliases=["tb","TB"], help="Kirim embed Test Ban (Simulasi) gaya LEINA.")
+    @commands.command(name="tb", aliases=["TB", "testban"], help="Kirim embed Test Ban (Simulasi) gaya LEINA.")
     @commands.guild_only()
-    async def testban(self, ctx: commands.Context, member: Optional[discord.Member]=None, *, reason: str="—"):
+    async def tb(self, ctx: commands.Context, member: Optional[discord.Member]=None, *, reason: str="—"):
         # target: reply -> author; else mention; else invoker
         if member is None and ctx.message.reference:
             with contextlib.suppress(Exception):
@@ -29,7 +29,7 @@ class BanCommands(commands.Cog):
         if member is None:
             member = ctx.author
 
-        # evidence: dari command message
+        # evidence
         evidence = None
         with contextlib.suppress(Exception):
             if ctx.message.attachments:
@@ -43,7 +43,7 @@ class BanCommands(commands.Cog):
 
         embed = build_testban_embed(target=member, moderator=ctx.author, reason=reason, evidence_url=evidence)
 
-        # priority: TESTBAN channel -> LOG_BOTPHISHING -> current channel
+        # priority: TESTBAN -> LOG_BOTPHISHING -> ctx.channel
         me = ctx.guild.me
         target_ch = None
         for cid in (TESTBAN_CHANNEL_ID, LOG_BOTPHISHING):
@@ -64,20 +64,20 @@ class BanCommands(commands.Cog):
             await ctx.reply(f"❌ Gagal kirim embed: {e!r}", mention_author=False)
 
 async def setup(bot: commands.Bot):
-    # Safeguard: if another tb exists, we still register this cog but command name will be same;
-    # discord.py will raise on conflict; so remove previous tb if it's just alias to old testban.
-    if bot.get_command("tb") and bot.get_command("testban"):
-        # Prefer this implementation: remove old command 'testban' then add ours.
+    # Hapus command lama yang bentrok lebih dulu
+    for name in ("tb", "testban", "TB"):
         try:
-            bot.remove_command("testban")
+            if bot.get_command(name):
+                bot.remove_command(name)
         except Exception:
             pass
     await bot.add_cog(BanCommands(bot))
 
 def setup_legacy(bot: commands.Bot):
-    try:
-        if bot.get_command("tb") and bot.get_command("testban"):
-            bot.remove_command("testban")
-    except Exception:
-        pass
+    for name in ("tb", "testban", "TB"):
+        try:
+            if bot.get_command(name):
+                bot.remove_command(name)
+        except Exception:
+            pass
     bot.add_cog(BanCommands(bot))
