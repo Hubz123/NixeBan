@@ -9,6 +9,25 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=LOG_LEVEL, format="%(levelname)s:%(name)s:%(message)s")
 log = logging.getLogger("nixe.main")
 
+class _OnceFilter(logging.Filter):
+    def __init__(self, needle: str):
+        super().__init__()
+        self.needle = needle
+        self.seen = False
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+        if self.needle in msg:
+            if self.seen:
+                return False
+            self.seen = True
+        return True
+
+logging.getLogger("discord.client").addFilter(_OnceFilter("logging in using static token"))
+logging.getLogger("discord.client").addFilter(_OnceFilter("PyNaCl is not installed"))
+
 # Create loggers to mimic original format
 log_cogs_loader = logging.getLogger("nixe.cogs_loader")
 log_handlers = logging.getLogger("nixe.discord.handlers_crucial")
@@ -62,6 +81,7 @@ EDIT_MIN_INTERVAL = int(os.getenv("PHASH_BOARD_EDIT_MIN_INTERVAL", "20"))  # sec
 @dataclass
 class State:
     phash_tokens: Set[str] = field(default_factory=set)
+    discovered_db_message_id: int = 0
     last_edit_ts: float = 0.0
     last_fetch_ts: float = 0.0
     hits: int = 0
@@ -228,6 +248,29 @@ async def _ban_and_delete(msg: discord.Message, reason: str) -> None:
     except Exception as e:
         log_handlers.error("Ban failed: %r", e)
 
+
+async def _discover_db_message_id_in_thread() -> int:
+    if DB_THREAD_ID == 0:
+        return 0
+    try:
+        ch = bot.get_channel(DB_THREAD_ID) or await bot.fetch_channel(DB_THREAD_ID)
+    except Exception:
+        return 0
+    try:
+        pins = await ch.pins()
+        for m in pins:
+            if _looks_like_phash_db(getattr(m, "content", "") or ""):
+                return int(m.id)
+    except Exception:
+        pass
+    try:
+        async for m in ch.history(limit=500):
+            if _looks_like_phash_db(getattr(m, "content", "") or ""):
+                return int(m.id)
+    except Exception:
+        pass
+    return 0
+
 @bot.event
 async def on_ready():
     STATE.bot_ready = True
@@ -300,7 +343,7 @@ async def handle_healthz(_):
 async def start_web():
     app = web.Application()
     app.add_routes([web.get("/", handle_root), web.get("/healthz", handle_healthz)])
-    runner = web.AppRunner(app)
+    runner = web.AppRunner(app, access_log=None)
     await runner.setup()
     site = web.TCPSite(runner, host="0.0.0.0", port=PORT)
     await site.start()
