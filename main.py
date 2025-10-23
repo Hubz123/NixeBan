@@ -1,13 +1,14 @@
 from __future__ import annotations
-import os, io, asyncio, logging, json, time as _time, contextlib
+import os, io, asyncio, logging, json, time as _time, contextlib, importlib, pkgutil, inspect
 from typing import Optional, Set, Dict
 from dataclasses import dataclass, field
 
+# ---------- Logging ----------
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=LOG_LEVEL, format="%(levelname)s:%(name)s:%(message)s")
 log = logging.getLogger("nixe.main")
 
-# Silence aiohttp.access
+# Silence /healthz access logs (Render spam)
 try:
     from aiohttp.web_log import AccessLogger
     class _SilentAccessLogger(AccessLogger):
@@ -30,6 +31,7 @@ class _OnceFilter(logging.Filter):
 logging.getLogger("discord.client").addFilter(_OnceFilter("logging in using static token"))
 logging.getLogger("discord.client").addFilter(_OnceFilter("PyNaCl is not installed"))
 
+# ---------- Third-parties ----------
 import discord
 from discord.ext import commands, tasks
 from aiohttp import web
@@ -39,20 +41,29 @@ try:
 except Exception:
     imagehash = None
 
+# ---------- Module IDs ----------
+from nixe.config_ids import LOG_BOTPHISHING as LOG_CH, TESTBAN_CHANNEL_ID, THREAD_IMAGEPHISH
+
+# ---------- pHash Config (module) ----------
 from nixe.config_phash import (
     PHASH_DB_THREAD_ID as DB_THREAD_ID,
     PHASH_DB_MESSAGE_ID as DB_MESSAGE_ID,
     PHASH_DB_STRICT_EDIT as STRICT_EDIT,
-    PHASH_IMAGEPHISH_THREAD_ID as LEARN_THREAD_ID,
     PHASH_DB_MAX_ITEMS as MAX_HASHES,
     PHASH_BOARD_EDIT_MIN_INTERVAL as EDIT_MIN_INTERVAL,
 )
 
+# ---------- Bot ----------
 DISCORD_TOKEN = (os.getenv("DISCORD_TOKEN") or "").strip()
 if not DISCORD_TOKEN:
     raise SystemExit("[FATAL] DISCORD_TOKEN missing")
 PORT = int(os.getenv("PORT", "10000"))
 
+intents = discord.Intents.default()
+intents.guilds=True; intents.members=True; intents.message_content=True
+bot = commands.Bot(command_prefix="!", intents=intents, allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True, replied_user=False))
+
+# ---------- State ----------
 @dataclass
 class State:
     phash_tokens: Set[str] = field(default_factory=set)
@@ -65,9 +76,9 @@ class State:
     seen_msg_ids: Set[int] = field(default_factory=set)
     pinned_cache_content: str = ""
     discovered_db_message_id: int = 0
-    cogs_logged_once: bool = False
 STATE = State()
 
+# ---------- Helpers ----------
 def compute_hash_from_image(img: Image.Image) -> str:
     if imagehash is not None:
         return str(imagehash.phash(img))
@@ -76,7 +87,7 @@ def compute_hash_from_image(img: Image.Image) -> str:
     bits = "".join("1" if p > avg else "0" for p in px)
     return "".join(f"{int(bits[i:i+4],2):x}" for i in range(0,64,4))
 
-async def image_bytes_to_hash(data: bytes) -> str|None:
+async def image_bytes_to_hash(data: bytes) -> Optional[str]:
     try:
         with Image.open(io.BytesIO(data)) as img:
             return compute_hash_from_image(img.convert("RGB"))
@@ -115,26 +126,21 @@ def _looks_like_phash_db(text: str) -> bool:
         return isinstance(data, dict) and "phash" in data
     return len(_parse_tokens_from_pinned(s)) >= 1
 
-intents = discord.Intents.default()
-intents.guilds=True; intents.members=True; intents.message_content=True
-bot = commands.Bot(command_prefix="!", intents=intents, allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True, replied_user=False))
-
 async def _discover_db_message_id_in_thread() -> int:
     if DB_THREAD_ID == 0: return 0
     try:
         ch = bot.get_channel(DB_THREAD_ID) or await bot.fetch_channel(DB_THREAD_ID)
     except Exception:
         return 0
-    # Use async iterator to avoid deprecation warning
     with contextlib.suppress(Exception):
-        async for m in ch.pins():
+        for m in await ch.pins():
             if _looks_like_phash_db(getattr(m, "content", "")): return int(m.id)
     with contextlib.suppress(Exception):
         async for m in ch.history(limit=500):
             if _looks_like_phash_db(getattr(m, "content", "")): return int(m.id)
     return 0
 
-async def _fetch_pinned_message() -> discord.Message|None:
+async def _fetch_pinned_message() -> Optional[discord.Message]:
     msg_id = DB_MESSAGE_ID or STATE.discovered_db_message_id or 0
     if DB_THREAD_ID == 0: return None
     if msg_id == 0:
@@ -159,10 +165,6 @@ async def _load_db_from_pin(reason: str = "refresh") -> None:
     STATE.phash_tokens = set(list(tokens)[:MAX_HASHES])
     STATE.pinned_cache_content = new_content
     STATE.last_fetch_ts = _time.time()
-    if not STATE.cogs_logged_once:
-        logging.getLogger("nixe.cogs_loader").info("✅ Loaded cog: nixe.cogs.phash_match_guard")
-        logging.getLogger("nixe.discord.handlers_crucial").info("🧩 Cogs loaded (core + autodiscover).")
-        STATE.cogs_logged_once = True
     log.info("🔄 pHash board updated: %d tokens (was %d) — reason=%s", len(STATE.phash_tokens), prev, reason)
 
 async def _edit_pinned(tokens: Set[str]) -> bool:
@@ -182,7 +184,7 @@ async def _edit_pinned(tokens: Set[str]) -> bool:
     except Exception as e:
         log.error("Edit pinned failed: %r", e); return False
 
-async def _maybe_download(url: str) -> bytes|None:
+async def _maybe_download(url: str) -> Optional[bytes]:
     import aiohttp
     try:
         timeout = aiohttp.ClientTimeout(total=15)
@@ -212,34 +214,72 @@ def _dedupe_allow_ban(user_id: int, ttl: int = 30) -> bool:
     if user_id in STATE.dedupe_ban and STATE.dedupe_ban[user_id] > now: return False
     STATE.dedupe_ban[user_id] = now + ttl; return True
 
+# Embed for ban logs
+from nixe.cogs.ban_embed_leina import build_banned_embed
+
 async def _ban_and_delete(msg: discord.Message, reason: str) -> None:
     STATE.hits += 1
     with contextlib.suppress(Exception): await msg.delete()
+    banned_ok=False
     try:
         if msg.guild and _dedupe_allow_ban(getattr(msg.author, "id", 0)):
             await msg.guild.ban(msg.author, reason=reason, delete_message_days=1)
-            STATE.bans += 1
-            logging.getLogger("nixe.discord.handlers_crucial").warning("BANNED user=%s reason=%s", getattr(msg.author,"id","?"), reason)
+            STATE.bans += 1; banned_ok=True
     except Exception as e:
         logging.getLogger("nixe.discord.handlers_crucial").error("Ban failed: %r", e)
+    # log embed ke LOG_BOTPHISHING
+    try:
+        ch = msg.guild.get_channel(LOG_CH) or await bot.fetch_channel(LOG_CH)
+        if ch and isinstance(ch, (discord.TextChannel, discord.Thread)):
+            evidence=None
+            if msg.attachments: evidence = msg.attachments[0].url
+            elif msg.embeds and getattr(msg.embeds[0], "image", None):
+                evidence = getattr(msg.embeds[0].image, "url", None)
+            emb = build_banned_embed(target=msg.author, moderator=msg.guild.me, reason=reason, evidence_url=evidence)
+            await ch.send(embed=emb, allowed_mentions=discord.AllowedMentions.none())
+    except Exception:
+        pass
+    if banned_ok:
+        logging.getLogger("nixe.discord.handlers_crucial").warning("BANNED user=%s reason=%s", getattr(msg.author,"id","?"), reason)
 
-async def _log_cogs_once(delay: float = 4.0):
-    await asyncio.sleep(delay)
-    names = sorted(bot.cogs.keys())
-    logger = logging.getLogger("nixe.cogs_loader")
-    logger.info("✅ All cogs ready: %d loaded", len(names))
+# ---------- Autoload all cogs ----------
+async def _autoload_all_cogs(bot: commands.Bot):
+    names = []
+    try:
+        pkg = importlib.import_module("nixe.cogs")
+    except Exception as e:
+        logging.getLogger("nixe.cogs_loader").error("Cannot import nixe.cogs: %r", e)
+        return names
+    for m in pkgutil.iter_modules(pkg.__path__, pkg.__name__ + "."):
+        modname = m.name
+        base = modname.rsplit(".", 1)[-1]
+        if base.startswith("_") or base in ("__init__",):
+            continue
+        try:
+            mod = importlib.import_module(modname)
+            setup = getattr(mod, "setup", None) or getattr(mod, "setup_legacy", None)
+            if setup is None: continue
+            if inspect.iscoroutinefunction(setup):
+                await setup(bot)
+            else:
+                setup(bot)
+            names.append(modname)
+        except Exception as e:
+            logging.getLogger("nixe.cogs_loader").error("Failed to load %s: %r", modname, e)
+    logging.getLogger("nixe.cogs_loader").info("✅ Autoloaded %d cogs", len(names))
     if os.getenv("NIXE_LOG_COGS", "0").lower() not in ("0","false","no"):
-        # Log in chunks to avoid overly long lines
         for i in range(0, len(names), 12):
-            logger.info("• %s", ", ".join(names[i:i+12]))
+            logging.getLogger("nixe.cogs_loader").info("• %s", ", ".join(names[i:i+12]))
+    return names
 
+# ---------- Events ----------
 @bot.event
 async def on_ready():
     logging.getLogger("nixe.discord.handlers_crucial").info("✅ Bot berhasil login sebagai %s (ID: %s)", getattr(bot.user, "name", "?"), getattr(bot.user, "id", "?"))
     logging.getLogger("nixe.discord.handlers_crucial").info("🌐 Mode: %s", os.getenv("NIXE_MODE", "production"))
     await _load_db_from_pin("startup")
     _refresh_pin_task.start()
-    asyncio.create_task(_log_cogs_once())  # <- log jumlah cogs sekali saja
+    await _autoload_all_cogs(bot)
     log.info("🌐 Web running on port %d; health: /healthz", PORT)
 
 @tasks.loop(seconds=180)
@@ -248,27 +288,41 @@ async def _refresh_pin_task():
 
 @bot.event
 async def on_message(message: discord.Message):
-    if getattr(message.author, "bot", False): return
-    if message.id in STATE.seen_msg_ids: return
+    if getattr(message.author, "bot", False):
+        return
+    # Allow commands even on duplicates
+    if message.id in STATE.seen_msg_ids:
+        await bot.process_commands(message)
+        return
     STATE.seen_msg_ids.add(message.id)
     ch_id = getattr(message.channel, "id", 0) or 0
-    if LEARN_THREAD_ID and ch_id == LEARN_THREAD_ID:
-        async for data in _iter_image_payloads(message):
-            h = await image_bytes_to_hash(data)
-            if h and h not in STATE.phash_tokens:
-                STATE.phash_tokens.add(h)
-                await _edit_pinned(STATE.phash_tokens)
+    if THREAD_IMAGEPHISH and ch_id == THREAD_IMAGEPHISH:
+        try:
+            async for data in _iter_image_payloads(message):
+                h = await image_bytes_to_hash(data)
+                if h and h not in STATE.phash_tokens:
+                    STATE.phash_tokens.add(h)
+                    await _edit_pinned(STATE.phash_tokens)
+        except Exception as e:
+            logging.getLogger("nixe.discord.handlers_crucial").error("learn-thread error: %r", e)
+        finally:
+            await bot.process_commands(message)
         return
     try:
         match=False
         async for data in _iter_image_payloads(message):
             STATE.images_scanned += 1
             h = await image_bytes_to_hash(data)
-            if h and h in STATE.phash_tokens: match=True; break
-        if match: await _ban_and_delete(message, "phishing image match (pHash)")
+            if h and h in STATE.phash_tokens:
+                match=True; break
+        if match:
+            await _ban_and_delete(message, "phishing image match (pHash)")
     except Exception as e:
         logging.getLogger("nixe.discord.handlers_crucial").error("on_message error: %r", e)
+    finally:
+        await bot.process_commands(message)
 
+# ---------- Web ----------
 async def handle_root(_): return web.Response(text="ok")
 async def handle_healthz(_):
     body = {
@@ -299,7 +353,8 @@ async def _main():
         await bot.start(DISCORD_TOKEN)
     finally:
         web_task.cancel()
-        with contextlib.suppress(Exception): await web_task
+        with contextlib.suppress(Exception):
+            await web_task
 
 if __name__ == "__main__":
     try:

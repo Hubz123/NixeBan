@@ -15,16 +15,21 @@ def _safe_name(u: Union[discord.Member, discord.User, None]) -> str:
     try: return f"{u.mention} ({u.id})"
     except Exception: return f"{getattr(u,'name','?')} ({getattr(u,'id','?')})"
 
-def build_testban_embed(*, target: Union[discord.Member, discord.User, None], moderator: Union[discord.Member, discord.User, None], reason: Optional[str]=None, evidence_url: Optional[str]=None) -> discord.Embed:
+def build_testban_embed(
+    *, target: Union[discord.Member, discord.User, None],
+    moderator: Union[discord.Member, discord.User, None],
+    reason: Optional[str] = None,
+    evidence_url: Optional[str] = None
+) -> discord.Embed:
     title = "💀 Test Ban (Simulasi)"
-    desc_lines = [
+    desc = "\n".join([
         f"**Target:** {_safe_name(target)}",
         f"**Moderator:** {_safe_name(moderator)}",
         f"**Reason:** {reason or '—'}",
         "",
         "*Ini hanya simulasi. Tidak ada aksi ban yang dilakukan.*",
-    ]
-    emb = discord.Embed(title=title, description="\n".join(desc_lines), colour=DANGER_RED)
+    ])
+    emb = discord.Embed(title=title, description=desc, colour=DANGER_RED)
     try:
         if target and target.display_avatar:
             emb.set_thumbnail(url=str(target.display_avatar.url))
@@ -35,14 +40,19 @@ def build_testban_embed(*, target: Union[discord.Member, discord.User, None], mo
     emb.set_footer(text=f"{BAN_BRAND_NAME} • {_wib_now_str()}")
     return emb
 
-def build_banned_embed(*, target: Union[discord.Member, discord.User, None], moderator: Union[discord.Member, discord.User, None], reason: Optional[str]=None, evidence_url: Optional[str]=None) -> discord.Embed:
+def build_banned_embed(
+    *, target: Union[discord.Member, discord.User, None],
+    moderator: Union[discord.Member, discord.User, None],
+    reason: Optional[str] = None,
+    evidence_url: Optional[str] = None
+) -> discord.Embed:
     title = "💀 BANNED"
-    desc_lines = [
+    desc = "\n".join([
         f"**Target:** {_safe_name(target)}",
         f"**Moderator:** {_safe_name(moderator)}",
         f"**Reason:** {reason or '—'}",
-    ]
-    emb = discord.Embed(title=title, description="\n".join(desc_lines), colour=DANGER_RED)
+    ])
+    emb = discord.Embed(title=title, description=desc, colour=DANGER_RED)
     try:
         if target and target.display_avatar:
             emb.set_thumbnail(url=str(target.display_avatar.url))
