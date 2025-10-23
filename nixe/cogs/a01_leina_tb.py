@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Optional
 import discord
 from discord.ext import commands
-from ..config_ids import LOG_BOTPHISHING
+from ..config_ids import TESTBAN_CHANNEL_ID
 from .ban_embed_leina import build_testban_embed
 
 class LeinaTB(commands.Cog):
@@ -22,6 +22,7 @@ class LeinaTB(commands.Cog):
         if member is None:
             await ctx.reply("❌ Target tidak ditemukan. Mention user atau balas (reply) pesannya.", mention_author=False)
             return
+
         evidence = None
         try:
             if ctx.message.attachments:
@@ -34,13 +35,17 @@ class LeinaTB(commands.Cog):
                 evidence = url
         except Exception:
             evidence = None
+
         embed = build_testban_embed(target=member, moderator=ctx.author, reason=reason, evidence_url=evidence)
+
+        # Send to TESTBAN channel
         try:
-            ch = ctx.guild.get_channel(LOG_BOTPHISHING) or await self.bot.fetch_channel(LOG_BOTPHISHING)
+            ch = ctx.guild.get_channel(TESTBAN_CHANNEL_ID) or await self.bot.fetch_channel(TESTBAN_CHANNEL_ID)
             if ch and isinstance(ch, (discord.TextChannel, discord.Thread)):
                 await ch.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
         except Exception:
             pass
+
         try:
             await ctx.message.add_reaction("✅")
         except Exception:
@@ -48,4 +53,6 @@ class LeinaTB(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(LeinaTB(bot))
-def setup_legacy(bot: commands.Bot): bot.add_cog(LeinaTB(bot))
+
+def setup_legacy(bot: commands.Bot):
+    bot.add_cog(LeinaTB(bot))
