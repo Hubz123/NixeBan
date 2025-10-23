@@ -125,8 +125,9 @@ async def _discover_db_message_id_in_thread() -> int:
         ch = bot.get_channel(DB_THREAD_ID) or await bot.fetch_channel(DB_THREAD_ID)
     except Exception:
         return 0
+    # Use async iterator to avoid deprecation warning
     with contextlib.suppress(Exception):
-        for m in await ch.pins():
+        async for m in ch.pins():
             if _looks_like_phash_db(getattr(m, "content", "")): return int(m.id)
     with contextlib.suppress(Exception):
         async for m in ch.history(limit=500):
@@ -171,7 +172,6 @@ async def _edit_pinned(tokens: Set[str]) -> bool:
     msg = await _fetch_pinned_message()
     if not msg: return False
     items = sorted(set(tokens))[:MAX_HASHES]
-    # Build JSON safely to avoid escape issues on Windows
     content_json = json.dumps({"phash": items}, ensure_ascii=False, indent=2)
     content = "```json\n" + content_json + "\n```\n[phash-db-board]"
     if content.strip() == (msg.content or "").strip(): return True
@@ -223,12 +223,23 @@ async def _ban_and_delete(msg: discord.Message, reason: str) -> None:
     except Exception as e:
         logging.getLogger("nixe.discord.handlers_crucial").error("Ban failed: %r", e)
 
+async def _log_cogs_once(delay: float = 4.0):
+    await asyncio.sleep(delay)
+    names = sorted(bot.cogs.keys())
+    logger = logging.getLogger("nixe.cogs_loader")
+    logger.info("✅ All cogs ready: %d loaded", len(names))
+    if os.getenv("NIXE_LOG_COGS", "0").lower() not in ("0","false","no"):
+        # Log in chunks to avoid overly long lines
+        for i in range(0, len(names), 12):
+            logger.info("• %s", ", ".join(names[i:i+12]))
+
 @bot.event
 async def on_ready():
     logging.getLogger("nixe.discord.handlers_crucial").info("✅ Bot berhasil login sebagai %s (ID: %s)", getattr(bot.user, "name", "?"), getattr(bot.user, "id", "?"))
     logging.getLogger("nixe.discord.handlers_crucial").info("🌐 Mode: %s", os.getenv("NIXE_MODE", "production"))
     await _load_db_from_pin("startup")
     _refresh_pin_task.start()
+    asyncio.create_task(_log_cogs_once())  # <- log jumlah cogs sekali saja
     log.info("🌐 Web running on port %d; health: /healthz", PORT)
 
 @tasks.loop(seconds=180)
