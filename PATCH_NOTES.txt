@@ -1,8 +1,0 @@
-Patch applied for Nixe (auto-dupe guards + Lucky Pull strict + pHash skip mark).
-
-ENV to set (example):
-  LOG_CHANNEL_ID=1430048839556927589
-  COG_EXCLUDE=nixe.cogs.lucky_pull_auto,nixe.cogs.lucky_pull_guard,nixe.cogs.phash_imagephising_inbox_watcher
-
-Changes:
-- ADD nixe/context_flags.py; PATCH nixe/cogs/lucky_pull_guard.py: mark_skip_phash before delete; PATCH nixe/cogs/patch_collect_phash_wrapper.py: should_skip_phash guard; PATCH nixe/cogs/phash_inbox_watcher.py: double-start guard; PATCH nixe/cogs/phash_hourly_scheduler.py: LOG_CHANNEL_ID support + tick; PATCH nixe/cogs_loader.py: COG_EXCLUDE + duplicate handling; PATCH nixe/cogs/cogs_loader.py: COG_EXCLUDE + duplicate handling
