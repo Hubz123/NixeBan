@@ -9,7 +9,7 @@ def _to_int(v, d):
         return int(d)
 
 # === Required ===
-PHASH_DB_THREAD_ID         = _to_int(os.getenv("PHASH_DB_THREAD_ID") or 1430048839556927589, 1430048839556927589)
+PHASH_DB_THREAD_ID         = _to_int(os.getenv("PHASH_DB_THREAD_ID") or 1431192568221270108, 1431192568221270108)
 PHASH_DB_MESSAGE_ID        = _to_int(os.getenv("PHASH_DB_MESSAGE_ID") or 0, 0)
 PHASH_IMAGEPHISH_THREAD_ID = _to_int(os.getenv("PHASH_IMAGEPHISH_THREAD_ID") or 1409949797313679492, 1409949797313679492)
 PHASH_DB_STRICT_EDIT       = bool(int(os.getenv("PHASH_DB_STRICT_EDIT") or 1))
