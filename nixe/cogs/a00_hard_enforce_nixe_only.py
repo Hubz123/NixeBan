@@ -7,12 +7,17 @@ log = logging.getLogger(__name__)
 NEW_LOG = 1431178130155896882
 NEW_DB  = 1431192568221270108
 
+DISABLE = os.getenv('NIXE_DISABLE_HARD_ENFORCE','0') == '1'
+
 class HardEnforceNixeOnly(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
     @commands.Cog.listener()
     async def on_ready(self):
+        if DISABLE:
+            log.info('[nixe-only] Hard enforce disabled by env. Skipping overrides.')
+            return
         # Force override config at runtime
         try:
             config.PHISH_LOG_CHAN_ID = NEW_LOG

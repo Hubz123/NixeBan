@@ -5,6 +5,7 @@ from discord.ext import commands
 import discord
 from nixe import config
 log = logging.getLogger(__name__)
+STRICT_EDIT = (os.getenv('PHASH_DB_STRICT_EDIT','0') == '1')
 
 class PhashDbThreadManager(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -50,7 +51,7 @@ class PhashDbThreadManager(commands.Cog):
                 if (t.name or "").lower() == (thread_name or "phash-db").lower():
                     thread = t; break
 
-        if thread is None and isinstance(chan, discord.TextChannel):
+        if thread is None and isinstance(chan, discord.TextChannel) and not STRICT_EDIT:
             try:
                 async for t in chan.archived_threads(limit=50):
                     if (t.name or "").lower() == (thread_name or "phash-db").lower():
@@ -79,7 +80,9 @@ class PhashDbThreadManager(commands.Cog):
         for m in pins:
             if m.author.id == self.bot.user.id and any((e.title or '').lower().startswith('phash db board') for e in m.embeds):
                 has_board = True; break
-        if not has_board:
+        if STRICT_EDIT and not has_board:
+            log.warning('[phash-db-manager] STRICT_EDIT=1 -> skip creation of board message.')
+        if not has_board and not STRICT_EDIT:
             src_id = (getattr(config,'PHASH_SOURCE_THREAD_ID', None) or
                       (int(os.getenv('NIXE_PHASH_SOURCE_THREAD_ID')) if (os.getenv('NIXE_PHASH_SOURCE_THREAD_ID') or '').isdigit() else None) or
                       getattr(config,'PHASH_IMAGEPHISH_THREAD_ID', None))
