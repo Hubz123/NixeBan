@@ -1,0 +1,152 @@
+
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+import os, asyncio, json, logging, discord
+from discord.ext import commands
+from typing import Set
+
+from nixe.helpers import img_hashing
+from nixe.helpers.phash_board import get_pinned_db_message, edit_pinned_db
+
+log = logging.getLogger(__name__)
+
+SRC_THREAD_ID = int(os.getenv("NIXE_PHASH_SOURCE_THREAD_ID", "0") or 0)
+SRC_THREAD_NAME = (os.getenv("NIXE_PHASH_SOURCE_THREAD_NAME") or "imagephising").lower()
+DB_THREAD_ID = int(os.getenv("NIXE_PHASH_DB_THREAD_ID", "0") or 0)
+DB_MSG_ID = int(os.getenv("PHASH_DB_MESSAGE_ID", "0") or 0)
+MAX_FRAMES = int(os.getenv("PHASH_MAX_FRAMES", "6"))
+AUTO_BACKFILL = (os.getenv("NIXE_PHASH_AUTOBACKFILL","0") == "1")
+BACKFILL_LIMIT = int(os.getenv("NIXE_PHASH_BACKFILL_LIMIT","0") or 0)
+IMAGE_EXTS = (".png",".jpg",".jpeg",".webp",".gif",".bmp",".tif",".tiff",".heic",".heif")
+
+def _extract(text: str) -> Set[str]:
+    try:
+        s = text.find("```json")
+        if s < 0: return set()
+        s = text.find("{", s)
+        e = text.find("```", s)
+        data = json.loads(text[s:e])
+        arr = data.get("phash") or []
+        return set(str(x) for x in arr if isinstance(x, str))
+    except Exception:
+        return set()
+
+def _is_src(ch: discord.abc.GuildChannel) -> bool:
+    try:
+        if isinstance(ch, discord.Thread):
+            if SRC_THREAD_ID and ch.id == SRC_THREAD_ID: return True
+            if not SRC_THREAD_ID and ch.name and ch.name.lower() == SRC_THREAD_NAME: return True
+    except Exception:
+        pass
+    return False
+
+class PhashRescanner(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self._ready = False
+        self._backfill_once = False
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if self._ready: return
+        self._ready = True
+        await asyncio.sleep(1.0)
+        log.info("[phash-rescanner] source=%s db_thread=%s db_msg=%s",
+                 SRC_THREAD_ID or SRC_THREAD_NAME, DB_THREAD_ID, DB_MSG_ID)
+        if AUTO_BACKFILL and not self._backfill_once:
+            self._backfill_once = True
+            try:
+                await self._run_backfill(BACKFILL_LIMIT or None)
+            except Exception:
+                log.exception("[phash-rescanner] autobackfill failed")
+
+    async def _run_backfill(self, limit: int|None):
+        if not DB_MSG_ID:
+            log.warning("[phash-rescanner] PHASH_DB_MESSAGE_ID is not set; skip backfill")
+            return
+        # resolve source thread
+        src = None
+        try:
+            if SRC_THREAD_ID:
+                src = self.bot.get_channel(SRC_THREAD_ID) or await self.bot.fetch_channel(SRC_THREAD_ID)
+            else:
+                dbth = self.bot.get_channel(DB_THREAD_ID) or await self.bot.fetch_channel(DB_THREAD_ID)
+                parent = getattr(dbth, "parent", None)
+                if parent:
+                    async for t in parent.archived_threads(limit=200, private=False):
+                        if t.name and t.name.lower() == SRC_THREAD_NAME:
+                            src = t; break
+                    if not src:
+                        for t in getattr(parent, "threads", []):
+                            if t.name and t.name.lower() == SRC_THREAD_NAME:
+                                src = t; break
+        except Exception:
+            src = None
+        if not isinstance(src, discord.Thread):
+            log.warning("[phash-rescanner] source thread not found")
+            return
+
+        # get existing tokens
+        msg = await get_pinned_db_message(self.bot)
+        existing = set()
+        if msg and (msg.content or ""):
+            existing |= _extract(msg.content)
+
+        # iterate history
+        new_tokens: Set[str] = set()
+        async for m in src.history(limit=limit):
+            if not m.attachments: continue
+            for att in m.attachments:
+                nm = (att.filename or "").lower()
+                if not any(nm.endswith(ext) for ext in IMAGE_EXTS): continue
+                try: raw = await att.read()
+                except Exception: raw = b""
+                if not raw: continue
+                for h in img_hashing.phash_list_from_bytes(raw, max_frames=MAX_FRAMES):
+                    if h not in existing:
+                        new_tokens.add(h)
+        if not new_tokens:
+            log.info("[phash-rescanner] backfill: nothing new")
+            return
+        merged = existing | new_tokens
+        ok = await edit_pinned_db(self.bot, merged)
+        log.info("[phash-rescanner] backfill merge: +%d -> %s", len(new_tokens), "OK" if ok else "SKIPPED")
+
+    @commands.command(name="phash-rescan")
+    @commands.has_guild_permissions(manage_messages=True)
+    async def phash_rescan_cmd(self, ctx: commands.Context, limit: int = 0):
+        await ctx.reply("Starting rescan...", mention_author=False)
+        try:
+            await self._run_backfill(limit or None)
+        except Exception as e:
+            log.exception("[phash-rescanner] rescan failed: %s", e)
+            await ctx.reply(f"Rescan failed: {e!r}", mention_author=False)
+            return
+        await ctx.reply("Rescan done.", mention_author=False)
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if not message or not message.guild or message.author.bot: return
+        ch = message.channel
+        if not _is_src(ch): return
+        if not DB_MSG_ID: return
+        new_tokens: Set[str] = set()
+        for att in getattr(message, "attachments", None) or ():
+            nm = (att.filename or "").lower()
+            if not any(nm.endswith(ext) for ext in IMAGE_EXTS): continue
+            try: raw = await att.read()
+            except Exception: raw = b""
+            if not raw: continue
+            for h in img_hashing.phash_list_from_bytes(raw, max_frames=MAX_FRAMES):
+                new_tokens.add(h)
+        if not new_tokens: return
+        msg = await get_pinned_db_message(self.bot)
+        existing = set()
+        if msg and (msg.content or ""):
+            existing |= _extract(msg.content)
+        merged = existing | new_tokens
+        await edit_pinned_db(self.bot, merged)
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(PhashRescanner(bot))

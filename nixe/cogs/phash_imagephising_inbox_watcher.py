@@ -56,13 +56,12 @@ class PhashImagephisingWatcher(commands.Cog):
             return None
 
     async def _commit(self, dest: discord.abc.GuildChannel, board_msg_id: int, phashes: list[str], dhashes: list[str]):
-        # Leave commit to other cogs that manage the board (strict-edit mode).
-        # Here we just emit a debug log to confirm capture.
-        log.debug("[phash-inbox] captured %d phash, %d dhash for board %s", len(phashes), len(dhashes), board_msg_id)
+        # Collect-only watcher; merging handled by board cogs.
+        log.debug("[phash-inbox] captured %d p and %d d for board %s", len(phashes), len(dhashes), board_msg_id)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if not message or not message.guild or message.author.bot: 
+        if not message or not message.guild or message.author.bot:
             return
         ch = message.channel
         if not self._is_src(ch):
@@ -74,17 +73,14 @@ class PhashImagephisingWatcher(commands.Cog):
         dest = await self._get_dest()
         if not dest:
             if not NO_FALLBACK and LOG_CH_ID:
-                # as a last resort if allowed (but default NO_FALLBACK=1 prevents this)
                 try:
                     d = self.bot.get_channel(LOG_CH_ID) or await self.bot.fetch_channel(LOG_CH_ID)
                     dest = d if isinstance(d, (discord.Thread, discord.TextChannel)) else None
                 except Exception:
                     dest = None
         if not dest:
-            # Nowhere to commit images -> drop silently
             return
 
-        # Collect hashes
         uniq_p, uniq_d = set(), set()
         cur_p, cur_d = [], []
         for att in attchs:
@@ -97,10 +93,12 @@ class PhashImagephisingWatcher(commands.Cog):
             for h in phash_list_from_bytes(raw, max_frames=6):
                 if h not in uniq_p:
                     uniq_p.add(h); cur_p.append(h)
-            for h in dhash_list_from_bytes(raw, max_frames=6):
-                if h not in uniq_d:
-                    uniq_d.add(h); cur_d.append(h)
-
+            try:
+                for h in dhash_list_from_bytes(raw, max_frames=6):
+                    if h not in uniq_d:
+                        uniq_d.add(h); cur_d.append(h)
+            except Exception:
+                pass
         if (cur_p or cur_d) and DEST_MSG_ID:
             await self._commit(dest, DEST_MSG_ID, cur_p, cur_d)
 
