@@ -1,41 +1,72 @@
+
 import os
-from typing import Optional
 import asyncio
+import logging
+import discord
 from discord.ext import commands
 
+log = logging.getLogger(__name__)
+
+PHASH_DB_MARKER = os.getenv("PHASH_DB_MARKER", "NIXE_PHASH_DB_V1").strip()
+STRICT = bool(int(os.getenv("PHASH_DB_STRICT_EDIT", "1")))
+DB_MSG_ID = int(os.getenv("PHASH_DB_MESSAGE_ID", "0") or 0)
+LOG_CH_ID = int(os.getenv("LOG_CHANNEL_ID", "0") or 0)
+DB_THREAD_ID = int(os.getenv("NIXE_PHASH_DB_THREAD_ID", "0") or 0)
+
 class PhashDbEditFixOverlay(commands.Cog):
-    """Overlay to prevent creating new pHash DB messages.
-    Forces editing an existing pinned message if IDs are provided.
-    """
-    def __init__(self, bot):
+    def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.strict = os.environ.get("PHASH_DB_STRICT_EDIT", "1") == "1"
-        self.thread_id = int(os.environ.get("PHASH_DB_THREAD_ID", "0")) or int(os.environ.get("PHASH_IMAGEPHISH_THREAD_ID", "0")) if os.environ.get("PHASH_IMAGEPHISH_THREAD_ID") else 0
-        self.msg_id = int(os.environ.get("PHASH_DB_MESSAGE_ID", "0"))
-        self._ready_once = False
+        self._task = self.bot.loop.create_task(self._run())
 
-    @commands.Cog.listener()
-    async def on_ready(self):
-        if self._ready_once:
-            return
-        self._ready_once = True
-
-        if self.strict and (self.thread_id == 0 or self.msg_id == 0):
-            # Strict mode without IDs: do nothing (never create new message)
-            return
-
+    def cog_unload(self):
         try:
-            channel = self.bot.get_channel(self.thread_id) or await self.bot.fetch_channel(self.thread_id)
-            msg = await channel.fetch_message(self.msg_id)
-            # Attach a marker attribute for other cogs to find and reuse
-            setattr(self.bot, "_phash_db_edit_message", msg)
-        except Exception as e:
-            # If strict, never create new
-            if self.strict:
-                # Log but do nothing; prevents accidental new posts.
-                print(f"[phash-db-edit-fix] strict edit only; could not fetch existing message: {e}")
-            else:
-                print(f"[phash-db-edit-fix] non-strict; existing message not found: {e}")
+            self._task.cancel()
+        except Exception:
+            pass
 
-async def setup(bot):
+    async def _try_fetch(self) -> discord.Message | None:
+        if DB_MSG_ID <= 0:
+            return None
+        # 1) Try thread first (common case)
+        if DB_THREAD_ID:
+            try:
+                th = self.bot.get_channel(DB_THREAD_ID) or await self.bot.fetch_channel(DB_THREAD_ID)
+                if isinstance(th, (discord.Thread, discord.TextChannel)):
+                    return await th.fetch_message(DB_MSG_ID)
+            except Exception:
+                pass
+        # 2) Fallback: main log channel
+        if LOG_CH_ID:
+            try:
+                ch = self.bot.get_channel(LOG_CH_ID) or await self.bot.fetch_channel(LOG_CH_ID)
+                if isinstance(ch, (discord.Thread, discord.TextChannel)):
+                    return await ch.fetch_message(DB_MSG_ID)
+            except Exception:
+                pass
+        # 3) Last resort: scan recent messages in log channel for marker
+        if LOG_CH_ID:
+            try:
+                ch = self.bot.get_channel(LOG_CH_ID) or await self.bot.fetch_channel(LOG_CH_ID)
+                async for m in ch.history(limit=50):
+                    if m.author.id == self.bot.user.id and PHASH_DB_MARKER in (m.content or ""):
+                        return m
+            except Exception:
+                pass
+        return None
+
+    async def _run(self):
+        await self.bot.wait_until_ready()
+        await asyncio.sleep(2)
+        msg = await self._try_fetch()
+        if not msg:
+            if STRICT:
+                log.warning("[phash-db-edit-fix] strict edit only; DB message not found in thread/log channel; skipping.")
+            else:
+                log.info("[phash-db-edit-fix] non-strict; DB message not found; skipping.")
+            return
+        log.info("[phash-db-edit-fix] DB message located (id=%s) — OK", msg.id)
+
+async def setup(bot: commands.Bot):
     await bot.add_cog(PhashDbEditFixOverlay(bot))
+def legacy_setup(bot: commands.Bot):
+    bot.add_cog(PhashDbEditFixOverlay(bot))

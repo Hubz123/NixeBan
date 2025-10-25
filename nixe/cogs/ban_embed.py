@@ -44,13 +44,13 @@ def build_ban_embed(
     **kwargs,
 ) -> discord.Embed:
     """
-    Build embed that matches Leina style exactly for Test Ban / Ban.
+    Build embed that matches external style exactly for Test Ban / Ban.
     - Title: '💀 Test Ban (Simulasi)' when simulate/dry_run, else '⛔ Ban'.
     - Color: red accent (left border).
     - Fields: 'Target:', 'Moderator:', 'Reason:' (reason '—' when empty).
     - Description (simulate only): italic Indonesian sentence.
     - Thumbnail: target avatar if available.
-    - Footer: 'SatpamBot • <YYYY-MM-DD HH:MM:SS WIB>'.
+    - Footer: 'external • <YYYY-MM-DD HH:MM:SS WIB>'.
     """
     is_sim = bool(simulate or dry_run)
 
@@ -83,8 +83,8 @@ def build_ban_embed(
     if turl:
         embed.set_thumbnail(url=turl)
 
-    # Footer ALWAYS 'SatpamBot' (to match the screenshot)
-    embed.set_footer(text=f"SatpamBot • {_now_wib_str()}")
+    # Footer ALWAYS 'external' (to match the screenshot)
+    embed.set_footer(text=f"external • {_now_wib_str()}")
     return embed
 
 # Ensure module passes smoke setup import

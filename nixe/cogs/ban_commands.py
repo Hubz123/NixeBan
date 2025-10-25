@@ -4,7 +4,7 @@ from typing import Optional
 import discord
 from discord.ext import commands
 from ..config_ids import LOG_BOTPHISHING, TESTBAN_CHANNEL_ID
-from .ban_embed_leina import build_testban_embed
+from .ban_embed import build_testban_embed
 def _can_send(ch: discord.abc.GuildChannel, me: discord.Member) -> bool:
     try:
         perms = ch.permissions_for(me)
@@ -14,7 +14,7 @@ def _can_send(ch: discord.abc.GuildChannel, me: discord.Member) -> bool:
 class BanCommands(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-    @commands.command(name="tb", aliases=["TB", "testban"], help="Kirim embed Test Ban (Simulasi) gaya LEINA.")
+    @commands.command(name="tb", aliases=["TB", "testban"], help="Kirim embed Test Ban (Simulasi) gaya external.")
     @commands.guild_only()
     async def tb(self, ctx: commands.Context, member: Optional[discord.Member]=None, *, reason: str="—"):
         if member is None and ctx.message.reference:

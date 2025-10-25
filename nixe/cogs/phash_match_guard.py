@@ -71,7 +71,7 @@ class NixePhashMatchGuard(commands.Cog):
             ch = guild.get_channel(LOG_CHANNEL_ID)
         if not isinstance(ch, discord.TextChannel):
             for c in guild.text_channels:
-                if c.name.lower() in {"log-botphising","log-botphishing","log_botphising","log-phishing"}:
+                if c.name.lower() in {'nixe-only'}:
                     ch = c; break
         if not isinstance(ch, discord.TextChannel):
             return []

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Smoketest (pre-push) for NIXE/Leina
+Smoketest (pre-push) for NIXE/external
 
 Default (safe) mode:
   1) Python >= 3.10

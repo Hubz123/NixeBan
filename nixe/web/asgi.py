@@ -4,7 +4,7 @@ from __future__ import annotations
 # ASGI wrapper for Flask app so uvicorn can serve it
 from uvicorn.middleware.wsgi import WSGIMiddleware  # type: ignore
 try:
-    from app import app as _flask_app  # Flask WSGI app exported by Leina
+    from app import app as _flask_app  # Flask WSGI app exported by external
 except Exception as e:
     _flask_app = None
     _import_err = e

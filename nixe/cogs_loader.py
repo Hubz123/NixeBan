@@ -3,9 +3,9 @@
 Project cog loader for NIXE — TB de-dup + quiet idle.
 
 - Dedup: if a TB provider is already present, skip loading another TB provider.
-  * Default provider = 'leina'. Configure via NIXE_TB_PROVIDER env:
-      NIXE_TB_PROVIDER=leina   -> keep a01_leina_tb, skip a01_manual_tb
-      NIXE_TB_PROVIDER=manual  -> keep a01_manual_tb, skip a01_leina_tb
+  * Default provider = 'external'. Configure via NIXE_TB_PROVIDER env:
+      NIXE_TB_PROVIDER=external   -> keep a01_external_tb, skip a01_manual_tb
+      NIXE_TB_PROVIDER=manual  -> keep a01_manual_tb, skip a01_external_tb
       NIXE_TB_PROVIDER=both    -> load keduanya (tidak direkomendasikan; akan dobel)
 - Idle log filter for 'phash_hourly_scheduler' (same as previous patch):
       PHASH_HOURLY_VERBOSE=1          -> disable filter
@@ -15,6 +15,7 @@ Project cog loader for NIXE — TB de-dup + quiet idle.
 from __future__ import annotations
 import asyncio
 import logging
+from nixe.cogs.cogs_loader_patch import apply_module_filter
 import os
 import time
 from pkgutil import iter_modules
@@ -67,15 +68,15 @@ def _discover():
     return [base + n for n in names]
 
 def _should_skip_tb(modname: str, bot) -> bool:
-    provider_pref = (os.getenv("NIXE_TB_PROVIDER") or "leina").lower()
-    is_leina  = modname.endswith(".a01_leina_tb")
+    provider_pref = (os.getenv("NIXE_TB_PROVIDER") or "manual").lower()
+    is_external  = modname.endswith(".a01_external_tb")
     is_manual = modname.endswith(".a01_manual_tb")
 
     if provider_pref == "both":
         return False
-    if provider_pref == "leina" and is_manual:
+    if provider_pref == "external" and is_manual:
         return True
-    if provider_pref == "manual" and is_leina:
+    if provider_pref == "manual" and is_external:
         return True
 
     # Auto-dedupe: if 'tb' command already registered, skip the second provider
@@ -83,7 +84,7 @@ def _should_skip_tb(modname: str, bot) -> bool:
         tb_exists = "tb" in getattr(bot, "all_commands", {})
     except Exception:
         tb_exists = False
-    if tb_exists and (is_leina or is_manual):
+    if tb_exists and (is_external or is_manual):
         return True
     return False
 

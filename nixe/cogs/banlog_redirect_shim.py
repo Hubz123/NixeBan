@@ -1,27 +1,22 @@
-# nixe/cogs/banlog_redirect_shim.py
-from __future__ import annotations
-import logging
+import os, logging
 from discord.ext import commands
-from ..helpers.banlog import get_ban_log_channel as nixe_get, ensure_ban_thread as nixe_ensure
-
-log = logging.getLogger(__name__)
-
-class BanlogRedirectShim(commands.Cog):
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-
-    async def cog_load(self):
+log=logging.getLogger(__name__)
+BLOCKED=int(os.getenv('LOG_CHANNEL_ID','0') or 0)
+async def nixe_get(guild):
+    pref=int(os.getenv('NIXE_BAN_LOG_CHANNEL_ID', os.getenv('LOG_CHANNEL_ID','0')) or 0)
+    if pref:
         try:
-            import nixe.helpers.banlog_thread as leina_banlog  # type: ignore
-        except Exception as e:
-            log.info("[banlog-redirect] Leina helper not found; using NIXE-only.")
-            return
-        try:
-            leina_banlog.get_log_channel = lambda guild: nixe_get(guild)  # type: ignore
-            leina_banlog.ensure_ban_thread = lambda ch: nixe_ensure(ch)   # type: ignore
-            log.info("[banlog-redirect] Patched Leina banlog helper -> NIXE config")
-        except Exception as e:
-            log.warning("[banlog-redirect] Patch failed: %s", e)
-
-async def setup(bot: commands.Bot):
-    await bot.add_cog(BanlogRedirectShim(bot))
+            ch=guild.get_channel(pref) or await guild.fetch_channel(pref)
+            if ch and getattr(ch,'id',0)!=BLOCKED: return ch
+        except Exception: pass
+    name=(os.getenv('MOD_LOG_CHANNEL_NAME','nixe-only') or 'nixe-only').lower()
+    for c in guild.text_channels:
+        if (c.name or '').lower()==name and c.id!=BLOCKED: return c
+    return None
+async def nixe_ensure(ch):
+    if not ch or getattr(ch,'id',0)==BLOCKED: return None
+    return ch
+class Shim(commands.Cog):
+    def __init__(self,bot): self.bot=bot
+async def setup(bot): await bot.add_cog(Shim(bot))
+def legacy_setup(bot): bot.add_cog(Shim(bot))

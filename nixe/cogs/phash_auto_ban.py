@@ -15,7 +15,7 @@ EMBED_COLOR = 0xF4511E            # oranye, mirip "ban" accent
 DELETE_AFTER_SECONDS = 3600       # auto delete 1 jam
 WIB = timezone(timedelta(hours=7))
 LOG_CHANNEL_CANDIDATES = (
-    "log-botphising", "log-botphishing", "log-satpam",
+    'nixe-only', 'nixe-only', 'nixe-only',
     "banlog", "mod-log"
 )
 
