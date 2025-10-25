@@ -58,7 +58,7 @@ class PhashHourlyScheduler(commands.Cog):
             n = 0
             try: n = len(hashes)
             except: pass
-            log.info("[phash_hourly] collected phash (fallback): ~%s entries", n)
+            log.info("[phash_hourly] collected phash: ~%s entries", n)
         except Exception as e:
             log.exception("[phash_hourly] fallback collect failed: %s", e)
 

@@ -6,7 +6,7 @@ from nixe.helpers.img_hashing import phash_list_from_bytes, dhash_list_from_byte
 log = logging.getLogger(__name__)
 
 MARKER = (os.getenv("PHASH_DB_MARKER") or "NIXE_PHASH_DB_V1").strip()
-PHASH_NO_FALLBACK = (os.getenv("NIXE_PHASH_DISABLE_LOG_FALLBACK","1") == "1")
+PHASH_NO_FALLBACK = (os.getenv('NIXE_PHASH_DISABLE_LOG_FALLBACK','1') == '1')
 
 SRC_THREAD_ID = int(os.getenv("NIXE_PHASH_SOURCE_THREAD_ID", "0") or 0)
 SRC_THREAD_NAME = (os.getenv("NIXE_PHASH_SOURCE_THREAD_NAME") or "imagephising").lower()
@@ -58,29 +58,15 @@ class PhashImagephisingWatcher(commands.Cog):
         return False
 
     async def _get_dest_container(self):
-        # prefer DB thread id only; never fall back to LOG channel when PHASH_NO_FALLBACK=1
+        # prefer DB thread id
         if DEST_THREAD_ID:
             try:
                 d = self.bot.get_channel(DEST_THREAD_ID) or await self.bot.fetch_channel(DEST_THREAD_ID)
                 if isinstance(d, (discord.Thread, discord.TextChannel)):
-                    if isinstance(d, discord.Thread) and getattr(d, 'archived', False):
-                        try:
-                            await d.edit(archived=False, locked=False, reason="phash-inbox auto-unarchive")
-                        except Exception as e:
-                            log.warning("[phash-inbox] cannot unarchive dest thread: %s", e)
                     return d
-            except Exception as e:
-                log.warning("[phash-inbox] resolve dest thread failed: %s", e)
-        if PHASH_NO_FALLBACK:
-            return None
-        # optional fallback to LOG channel (legacy)
-        if LOG_CH_ID:
-            try:
-                d = self.bot.get_channel(LOG_CH_ID) or await self.bot.fetch_channel(LOG_CH_ID)
-                if isinstance(d, (discord.Thread, discord.TextChannel)):
-                    return d
-            except Exception:
-                pass
+            except Exception: pass
+        \1
+            except Exception: pass
         return None
 
     async def _get_or_find_db_message(self, dest):
