@@ -18,6 +18,7 @@ DB_MSG_ID = int(os.getenv("PHASH_DB_MESSAGE_ID", "0") or 0)
 MAX_FRAMES = int(os.getenv("PHASH_MAX_FRAMES", "6"))
 AUTO_BACKFILL = (os.getenv("NIXE_PHASH_AUTOBACKFILL","0") == "1")
 BACKFILL_LIMIT = int(os.getenv("NIXE_PHASH_BACKFILL_LIMIT","0") or 0)
+REQ_PERM = (os.getenv("PHASH_RESCAN_REQUIRE_PERM","1") == "1")
 
 IMAGE_EXTS = (".png",".jpg",".jpeg",".webp",".gif",".bmp",".tif",".tiff",".heic",".heif")
 
@@ -70,7 +71,7 @@ class PhashRescanner(commands.Cog):
         return existing
 
     async def _run_backfill(self, limit: Optional[int]):
-        # find source thread
+        # resolve source thread
         src: Optional[discord.Thread] = None
         try:
             if SRC_THREAD_ID:
@@ -78,7 +79,6 @@ class PhashRescanner(commands.Cog):
                 if isinstance(ch, discord.Thread):
                     src = ch
             else:
-                # fallback: search by name under DB thread's parent
                 dbth = self.bot.get_channel(DB_THREAD_ID) or await self.bot.fetch_channel(DB_THREAD_ID)
                 parent = getattr(dbth, "parent", None)
                 if parent:
@@ -121,23 +121,49 @@ class PhashRescanner(commands.Cog):
         ok = await edit_pinned_db(self.bot, merged)
         log.info("[phash-rescanner] backfill merge: +%d -> %s", len(new_tokens), "OK" if ok else "SKIPPED")
 
-    @commands.command(name="phash-rescan")
+    # permissions decorator (toggleable)
+    if REQ_PERM:
+        dec_perms = commands.has_guild_permissions(manage_messages=True)
+    else:
+        def dec_perms(func): return func
+
     @commands.guild_only()
-    @commands.has_guild_permissions(manage_messages=True)
+    @commands.command(name="phash_rescan", aliases=["phash-rescan","phashrescan","rescanphash","pr"])
+    @dec_perms
     async def phash_rescan_cmd(self, ctx: commands.Context, limit: int = 0):
-        # Require an existing board message
+        # quick reaction feedback even if send fails
+        try:
+            await ctx.message.add_reaction("🔄")
+        except Exception:
+            pass
         msg = await get_pinned_db_message(self.bot)
         if not msg:
-            await ctx.reply("PHASH DB board belum ditemukan. Jalankan `&phash-seed here` di thread DB dulu.", mention_author=False)
+            try:
+                await ctx.reply("PHASH DB board belum ditemukan. Jalankan `&phash-seed here` di thread DB dulu.", mention_author=False)
+            except Exception:
+                pass
             return
-        await ctx.reply("Starting rescan...", mention_author=False)
+        try:
+            await ctx.reply("Starting rescan...", mention_author=False)
+        except Exception:
+            pass
         try:
             await self._run_backfill(limit or None)
         except Exception as e:
             log.exception("[phash-rescanner] rescan failed: %s", e)
-            await ctx.reply(f"Rescan failed: {e!r}", mention_author=False)
+            try:
+                await ctx.reply(f"Rescan failed: {e!r}", mention_author=False)
+            except Exception:
+                pass
             return
-        await ctx.reply("Rescan done.", mention_author=False)
+        try:
+            await ctx.reply("Rescan done.", mention_author=False)
+        except Exception:
+            pass
+        try:
+            await ctx.message.add_reaction("✅")
+        except Exception:
+            pass
 
     @phash_rescan_cmd.error
     async def _rescan_err(self, ctx, error):
@@ -184,7 +210,7 @@ class PhashRescanner(commands.Cog):
 
         existing = await self._resolve_board_tokens()
         if not existing and not (await get_pinned_db_message(self.bot)):
-            # no board yet; skip silently (seed first)
+            # no board yet; skip
             return
 
         merged = existing | new_tokens
