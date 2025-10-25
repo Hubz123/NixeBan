@@ -52,8 +52,7 @@ class PhashRescanner(commands.Cog):
         if self._ready: return
         self._ready = True
         await asyncio.sleep(1.0)
-        log.info("[phash-rescanner] source=%s db_thread=%s db_msg=%s",
-                 SRC_THREAD_ID or SRC_THREAD_NAME, DB_THREAD_ID, DB_MSG_ID)
+        log.info("[phash-rescanner] source=%s db_thread=%s db_msg=%s", SRC_THREAD_ID or SRC_THREAD_NAME, DB_THREAD_ID, DB_MSG_ID)
         if AUTO_BACKFILL and not self._backfill_once:
             self._backfill_once = True
             try:
@@ -113,9 +112,13 @@ class PhashRescanner(commands.Cog):
         ok = await edit_pinned_db(self.bot, merged)
         log.info("[phash-rescanner] backfill merge: +%d -> %s", len(new_tokens), "OK" if ok else "SKIPPED")
 
+    @commands.guild_only()
     @commands.command(name="phash-rescan")
     @commands.has_guild_permissions(manage_messages=True)
     async def phash_rescan_cmd(self, ctx: commands.Context, limit: int = 0):
+        if DB_MSG_ID == 0:
+            await ctx.reply("PHASH_DB_MESSAGE_ID belum diset di .env — tidak bisa rescan.", mention_author=False)
+            return
         await ctx.reply("Starting rescan...", mention_author=False)
         try:
             await self._run_backfill(limit or None)
@@ -150,3 +153,21 @@ class PhashRescanner(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(PhashRescanner(bot))
+
+
+@phash_rescan_cmd.error
+async def _rescan_err(self, ctx, error):
+    try:
+        from discord.ext.commands import MissingPermissions, CheckFailure
+    except Exception:
+        MissingPermissions = CheckFailure = Exception
+    if isinstance(error, MissingPermissions) or isinstance(error, CheckFailure):
+        try:
+            await ctx.reply("Kamu tidak punya izin untuk menjalankan rescan (butuh Manage Messages).", mention_author=False)
+        except Exception:
+            pass
+    else:
+        try:
+            await ctx.reply(f"Gagal: {error!r}", mention_author=False)
+        except Exception:
+            pass

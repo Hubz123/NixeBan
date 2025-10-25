@@ -4,6 +4,7 @@ import asyncio
 import logging
 import discord
 from discord.ext import commands
+from nixe.helpers.phash_board import discover_db_message_id
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +59,17 @@ class PhashDbEditFixOverlay(commands.Cog):
         await self.bot.wait_until_ready()
         await asyncio.sleep(2)
         msg = await self._try_fetch()
+        if not msg:
+            try:
+                did = await discover_db_message_id(self.bot)
+                if did:
+                    try:
+                        ch = self.bot.get_channel(DB_THREAD_ID) or await self.bot.fetch_channel(DB_THREAD_ID)
+                        msg = await ch.fetch_message(did)
+                    except Exception:
+                        msg = None
+            except Exception:
+                msg = None
         if not msg:
             if STRICT:
                 log.warning("[phash-db-edit-fix] strict edit only; DB message not found in thread/log channel; skipping.")

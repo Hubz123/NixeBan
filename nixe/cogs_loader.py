@@ -53,7 +53,7 @@ _apply_scheduler_idle_filter()
 
 # --- Discovery & ordering
 SKIP = {"__pycache__"}
-PRIORITY_FIRST = ["ready_shim"]
+PRIORITY_FIRST = ["ready_shim", "phash_rescanner"]
 PRIORITY_LAST  = ["phash_hourly_scheduler"]
 
 def _discover():
