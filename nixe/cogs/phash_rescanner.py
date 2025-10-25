@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import os, asyncio, json, logging, discord
+from typing import Set, Optional
 from discord.ext import commands
-from typing import Set
 
 from nixe.helpers import img_hashing
 from nixe.helpers.phash_board import get_pinned_db_message, edit_pinned_db
@@ -18,6 +18,7 @@ DB_MSG_ID = int(os.getenv("PHASH_DB_MESSAGE_ID", "0") or 0)
 MAX_FRAMES = int(os.getenv("PHASH_MAX_FRAMES", "6"))
 AUTO_BACKFILL = (os.getenv("NIXE_PHASH_AUTOBACKFILL","0") == "1")
 BACKFILL_LIMIT = int(os.getenv("NIXE_PHASH_BACKFILL_LIMIT","0") or 0)
+
 IMAGE_EXTS = (".png",".jpg",".jpeg",".webp",".gif",".bmp",".tif",".tiff",".heic",".heif")
 
 def _extract(text: str) -> Set[str]:
@@ -52,7 +53,8 @@ class PhashRescanner(commands.Cog):
         if self._ready: return
         self._ready = True
         await asyncio.sleep(1.0)
-        log.info("[phash-rescanner] source=%s db_thread=%s db_msg=%s", SRC_THREAD_ID or SRC_THREAD_NAME, DB_THREAD_ID, DB_MSG_ID)
+        log.info("[phash-rescanner] source=%s db_thread=%s db_msg=%s",
+                 SRC_THREAD_ID or SRC_THREAD_NAME, DB_THREAD_ID, DB_MSG_ID)
         if AUTO_BACKFILL and not self._backfill_once:
             self._backfill_once = True
             try:
@@ -60,16 +62,23 @@ class PhashRescanner(commands.Cog):
             except Exception:
                 log.exception("[phash-rescanner] autobackfill failed")
 
-    async def _run_backfill(self, limit: int|None):
-        if not DB_MSG_ID:
-            log.warning("[phash-rescanner] PHASH_DB_MESSAGE_ID is not set; skip backfill")
-            return
-        # resolve source thread
-        src = None
+    async def _resolve_board_tokens(self) -> Set[str]:
+        msg = await get_pinned_db_message(self.bot)
+        existing: Set[str] = set()
+        if msg and (msg.content or ""):
+            existing |= _extract(msg.content)
+        return existing
+
+    async def _run_backfill(self, limit: Optional[int]):
+        # find source thread
+        src: Optional[discord.Thread] = None
         try:
             if SRC_THREAD_ID:
-                src = self.bot.get_channel(SRC_THREAD_ID) or await self.bot.fetch_channel(SRC_THREAD_ID)
+                ch = self.bot.get_channel(SRC_THREAD_ID) or await self.bot.fetch_channel(SRC_THREAD_ID)
+                if isinstance(ch, discord.Thread):
+                    src = ch
             else:
+                # fallback: search by name under DB thread's parent
                 dbth = self.bot.get_channel(DB_THREAD_ID) or await self.bot.fetch_channel(DB_THREAD_ID)
                 parent = getattr(dbth, "parent", None)
                 if parent:
@@ -86,38 +95,40 @@ class PhashRescanner(commands.Cog):
             log.warning("[phash-rescanner] source thread not found")
             return
 
-        # get existing tokens
-        msg = await get_pinned_db_message(self.bot)
-        existing = set()
-        if msg and (msg.content or ""):
-            existing |= _extract(msg.content)
+        existing = await self._resolve_board_tokens()
 
-        # iterate history
         new_tokens: Set[str] = set()
         async for m in src.history(limit=limit):
-            if not m.attachments: continue
-            for att in m.attachments:
+            for att in getattr(m, "attachments", ()) or ():
                 nm = (att.filename or "").lower()
-                if not any(nm.endswith(ext) for ext in IMAGE_EXTS): continue
-                try: raw = await att.read()
-                except Exception: raw = b""
-                if not raw: continue
+                if not any(nm.endswith(ext) for ext in IMAGE_EXTS): 
+                    continue
+                try:
+                    raw = await att.read()
+                except Exception:
+                    raw = b""
+                if not raw:
+                    continue
                 for h in img_hashing.phash_list_from_bytes(raw, max_frames=MAX_FRAMES):
                     if h not in existing:
                         new_tokens.add(h)
+
         if not new_tokens:
             log.info("[phash-rescanner] backfill: nothing new")
             return
+
         merged = existing | new_tokens
         ok = await edit_pinned_db(self.bot, merged)
         log.info("[phash-rescanner] backfill merge: +%d -> %s", len(new_tokens), "OK" if ok else "SKIPPED")
 
-    @commands.guild_only()
     @commands.command(name="phash-rescan")
+    @commands.guild_only()
     @commands.has_guild_permissions(manage_messages=True)
     async def phash_rescan_cmd(self, ctx: commands.Context, limit: int = 0):
-        if DB_MSG_ID == 0:
-            await ctx.reply("PHASH_DB_MESSAGE_ID belum diset di .env — tidak bisa rescan.", mention_author=False)
+        # Require an existing board message
+        msg = await get_pinned_db_message(self.bot)
+        if not msg:
+            await ctx.reply("PHASH DB board belum ditemukan. Jalankan `&phash-seed here` di thread DB dulu.", mention_author=False)
             return
         await ctx.reply("Starting rescan...", mention_author=False)
         try:
@@ -128,46 +139,56 @@ class PhashRescanner(commands.Cog):
             return
         await ctx.reply("Rescan done.", mention_author=False)
 
+    @phash_rescan_cmd.error
+    async def _rescan_err(self, ctx, error):
+        try:
+            from discord.ext.commands import MissingPermissions, CheckFailure
+        except Exception:
+            MissingPermissions = CheckFailure = Exception
+        if isinstance(error, MissingPermissions) or isinstance(error, CheckFailure):
+            try:
+                await ctx.reply("Kamu tidak punya izin untuk menjalankan rescan (butuh Manage Messages).", mention_author=False)
+            except Exception:
+                pass
+        else:
+            try:
+                await ctx.reply(f"Gagal: {error!r}", mention_author=False)
+            except Exception:
+                pass
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if not message or not message.guild or message.author.bot: return
+        # Incremental merge for new messages in source thread
+        if not message or not message.guild or message.author.bot:
+            return
         ch = message.channel
-        if not _is_src(ch): return
-        if not DB_MSG_ID: return
+        if not _is_src(ch):
+            return
+
         new_tokens: Set[str] = set()
-        for att in getattr(message, "attachments", None) or ():
+        for att in getattr(message, "attachments", ()) or ():
             nm = (att.filename or "").lower()
-            if not any(nm.endswith(ext) for ext in IMAGE_EXTS): continue
-            try: raw = await att.read()
-            except Exception: raw = b""
-            if not raw: continue
+            if not any(nm.endswith(ext) for ext in IMAGE_EXTS):
+                continue
+            try:
+                raw = await att.read()
+            except Exception:
+                raw = b""
+            if not raw:
+                continue
             for h in img_hashing.phash_list_from_bytes(raw, max_frames=MAX_FRAMES):
                 new_tokens.add(h)
-        if not new_tokens: return
-        msg = await get_pinned_db_message(self.bot)
-        existing = set()
-        if msg and (msg.content or ""):
-            existing |= _extract(msg.content)
+
+        if not new_tokens:
+            return
+
+        existing = await self._resolve_board_tokens()
+        if not existing and not (await get_pinned_db_message(self.bot)):
+            # no board yet; skip silently (seed first)
+            return
+
         merged = existing | new_tokens
         await edit_pinned_db(self.bot, merged)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(PhashRescanner(bot))
-
-
-@phash_rescan_cmd.error
-async def _rescan_err(self, ctx, error):
-    try:
-        from discord.ext.commands import MissingPermissions, CheckFailure
-    except Exception:
-        MissingPermissions = CheckFailure = Exception
-    if isinstance(error, MissingPermissions) or isinstance(error, CheckFailure):
-        try:
-            await ctx.reply("Kamu tidak punya izin untuk menjalankan rescan (butuh Manage Messages).", mention_author=False)
-        except Exception:
-            pass
-    else:
-        try:
-            await ctx.reply(f"Gagal: {error!r}", mention_author=False)
-        except Exception:
-            pass
