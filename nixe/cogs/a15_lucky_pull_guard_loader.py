@@ -8,7 +8,7 @@ class LuckyPullGuard_Loader(commands.Cog):
 
 async def setup(bot):
     if bot.get_cog("LuckyPullGuard") or bot.get_cog("LuckyPullDeleteMentionEnforcer"):
-        return  # already loaded
+        return
     try:
         await bot.add_cog(LuckyPullGuard(bot))
     except Exception:
