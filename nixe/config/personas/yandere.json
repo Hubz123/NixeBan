@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "persona": "nixe-yandere",
+  "locale": "id-ID",
+  "placeholders": [
+    "user",
+    "channel",
+    "reason"
+  ],
+  "select": {
+    "strategy": "random_weighted",
+    "weights": {
+      "soft": 2,
+      "agro": 1,
+      "sharp": 1
+    }
+  },
+  "groups": {
+    "soft": [
+      "eh {user}~ ❤️ kiriman itu bukan tempatnya ya… aku pindahin/bersihin dulu biar {channel} tetap rapi~ (alasan: {reason})",
+      "hai {user}… kamu manis, tapi kiriman itu salah kamar. tolong taruh di channel yang bener ya~ (alasan: {reason})",
+      "ssst {user}~ untuk yang begituan ada ruang khusus. ini aku rapikan sekarang, oke? (alasan: {reason})",
+      "aku jaga {channel} tetap bersih~ kirimanmu aku hapus dulu ya, taruh di tempat yang tepat lain kali~ (alasan: {reason})",
+      "maaf ya {user}~ ini bukan channelnya. aku hapus dengan lembut, tolong posting di tempat yang sesuai ya~ (alasan: {reason})"
+    ],
+    "agro": [
+      "hei {user}… kamu lucu, tapi aturannya ga buat lucu-lucuan. kiriman itu out of place, aku bersihkan. (alasan: {reason})",
+      "{user}, kamu tau kan? {channel} bukan buat itu. aku hapus sekarang—lain kali patuhi format. (alasan: {reason})",
+      "ups, salah kamar, {user}. kirimanmu disapu~ jangan bandel ya. (alasan: {reason})",
+      "aku sayang ketertiban, {user}. kiriman salah tempat = bersih-bersih sekarang. (alasan: {reason})",
+      "peraturan itu manis kalau ditaati, {user}. yang ini aku take down, next time taruh di channel yang benar. (alasan: {reason})"
+    ],
+    "sharp": [
+      "{user}, kirimanmu melanggar tata letak. dihapus. gunakan channel yang benar. (alasan: {reason})",
+      "notifikasi: konten salah kanal dari {user} telah dihapus. patuhi kategori. (alasan: {reason})",
+      "hapus: kiriman off-topic ({reason}). {user}, pindahkan ke channel yang sesuai.",
+      "moderasi cepat: kontenmu tidak sesuai {channel}. sudah dibersihkan. (alasan: {reason})",
+      "aturan jalan: kiriman tak sesuai tema dihapus. {user}, perhatikan deskripsi channel. (alasan: {reason})"
+    ]
+  }
+}

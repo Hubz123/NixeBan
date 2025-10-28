@@ -31,5 +31,10 @@
   "LUCKYPULL_GEMINI_ENABLE": "1",
   "GEMINI_API_KEY": "<gemini>",
   "GEMINI_MODEL": "gemini-2.5-flash",
-  "GEMINI_LUCKY_THRESHOLD": "0.65" 
+  "GEMINI_LUCKY_THRESHOLD": "0.65",
+  "LUCKYPULL_PERSONA": "yandere",
+  "LUCKYPULL_TONE": "random",
+  "LUCKYPULL_TONE_WEIGHTS": "soft:1,agro:2,sharp:1",
+  "LUCKYPULL_TONE_STICKY": "author",
+  "LUCKYPULL_HEUR_MODE": "soft"
 }
