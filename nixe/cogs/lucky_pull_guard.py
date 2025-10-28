@@ -30,14 +30,14 @@ async def _nixe_delete_and_mention(bot, message: discord.Message, redirect_id: i
     except Exception:
         dest = None
     mention = message.author.mention if getattr(message, "author", None) else ""
-    text = f"{mention} lucky pull pindah ke <#{redirect_id}> ya 🙏" if dest is None else f"{mention} lucky pull pindah ke {dest.mention} ya 🙏"
+    text = f"{mention} lucky pull pindah ke <#{redirect_id}> ya 🙏" if dest is None else            f"{mention} lucky pull pindah ke {dest.mention} ya 🙏"
     try:
         await message.channel.send(text, delete_after=15)
     except Exception:
         pass
 
 class LuckyPullDeleteMentionEnforcer(commands.Cog):
-    """Jika DELETE_ON_GUARD=1, hapus & mention di guard channels."""
+    """Core behavior: delete user post in guard channels and mention to redirect channel."""
     def __init__(self, bot): self.bot = bot
 
     @commands.Cog.listener()
@@ -49,15 +49,22 @@ class LuckyPullDeleteMentionEnforcer(commands.Cog):
             redirect_id = int((_get_env("LUCKYPULL_REDIRECT_CHANNEL_ID","0") or "0").strip())
             if not redirect_id:
                 return
-            # skip if already in redirect channel (anti-loop)
             if message.channel and message.channel.id == redirect_id:
-                return
+                return  # anti loop
             if str(message.channel.id) in guards:
                 await _nixe_delete_and_mention(self.bot, message, redirect_id)
         except Exception:
             pass
 
+# Backward-compat alias expected by loader(s)
+class LuckyPullGuard(LuckyPullDeleteMentionEnforcer):
+    pass
+
+# IMPORTANT: let loader decide adding the Cog to avoid duplicates.
 async def setup(bot):
+    # If there is no dedicated loader, we can add once here.
+    if bot.get_cog("LuckyPullGuard") or bot.get_cog("LuckyPullDeleteMentionEnforcer"):
+        return
     try:
         await bot.add_cog(LuckyPullDeleteMentionEnforcer(bot))
     except Exception:
