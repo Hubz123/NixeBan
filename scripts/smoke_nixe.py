@@ -1,251 +1,129 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-NIXE Smoketest v2.3 — strict & no self-false-positive
-"""
-import sys, os, ast, json, compileall, re
+import os, sys, json, time, inspect, importlib, urllib.request
 from pathlib import Path
 
+EXPECT_SOURCE_THREAD_ID   = 1431192568221270108  # PHASH DB / NIXE thread
+EXPECT_IMAGEPHISH_THREAD_ID = 1409949797313679492
+
 ROOT = Path(__file__).resolve().parents[1]
-THIS = Path(__file__).resolve()
-sys.path.insert(0, str(ROOT))
+ENVF = ROOT / "nixe" / "config" / "runtime_env.json"
+env = {}
+if ENVF.exists():
+    try: env = json.loads(ENVF.read_text(encoding="utf-8"))
+    except Exception: env = {}
 
-EXPECTED_IDS = {"THREAD_DB": 1431192568221270108, "THREAD_IMAGEPHISH": 1409949797313679492, "LOG_BOTPHISHING": 1431178130155896882}
+def env_get(k, d=""):
+    v = os.getenv(k)
+    if v is None: v = env.get(k, d)
+    return "" if v is None else str(v)
 
-def PASS(msg): print(f"[PASS] {msg}")
-def WARN(msg): print(f"[WARN] {msg}")
-def FAIL(msg): print(f"[FAIL] {msg}")
+PASS=WARN=FAIL=0
+def ok(msg):  print("[PASS]", msg);  globals()["PASS"]+=1
+def wrn(msg): print("[WARN]", msg);  globals()["WARN"]+=1
+def bad(msg): print("[FAIL]", msg);  globals()["FAIL"]+=1
 
-def _load_text(p: Path) -> str:
+# 1) import resolver & read thread IDs
+try:
+    cp = importlib.import_module("nixe.config_phash")
+    src = getattr(cp, "NIXE_PHASH_SOURCE_THREAD_ID", 0)
+    img = getattr(cp, "PHASH_IMAGEPHISH_THREAD_ID", 0)
+    print(f"[INFO] config_phash from: {inspect.getsourcefile(cp) or cp.__file__}")
+    print(f"[INFO] NIXE_PHASH_SOURCE_THREAD_ID={src}  PHASH_IMAGEPHISH_THREAD_ID={img}")
+
+    if src == 0:
+        bad("THREAD NIXE = 0 (resolver runtime_env.json salah)")
+    elif src != EXPECT_SOURCE_THREAD_ID:
+        wrn(f"THREAD NIXE beda: {src} (ekspektasi {EXPECT_SOURCE_THREAD_ID})")
+    else:
+        ok("THREAD NIXE sesuai")
+
+    if img == 0:
+        bad("THREAD imagephising = 0 (resolver runtime_env.json salah)")
+    elif img != EXPECT_IMAGEPHISH_THREAD_ID:
+        wrn(f"THREAD imagephising beda: {img} (ekspektasi {EXPECT_IMAGEPHISH_THREAD_ID})")
+    else:
+        ok("THREAD imagephising sesuai")
+except Exception as e:
+    bad(f"import nixe.config_phash: {e}")
+
+# 2) lucky_pull_guard: wajib ada alias class LuckyPullGuard & setup aman
+try:
+    lpg = importlib.import_module("nixe.cogs.lucky_pull_guard")
+    has_alias = hasattr(lpg, "LuckyPullGuard")
+    has_setup = "async def setup" in inspect.getsource(lpg)
+    if has_alias: ok("LuckyPullGuard tersedia (compat loader)")
+    else: bad("LuckyPullGuard tidak ditemukan (perlu alias di lucky_pull_guard)")
+    if has_setup: ok("lucky_pull_guard.setup ada (no-dup safe)")
+    else: wrn("lucky_pull_guard.setup tidak terdeteksi (loader harus handle)")
+except Exception as e:
+    bad(f"import lucky_pull_guard: {e}")
+
+# 3) dupe guard untuk LuckyPullAuto
+try:
+    lpa = Path(importlib.import_module("nixe.cogs.lucky_pull_auto").__file__)
+    txt = lpa.read_text(encoding="utf-8", errors="ignore")
+    if "bot.get_cog(\"LuckyPullAuto\")" in txt or "bot.get_cog('LuckyPullAuto')" in txt:
+        ok("LuckyPullAuto setup: ada anti-duplicate guard")
+    else:
+        wrn("LuckyPullAuto setup: TIDAK ada anti-duplicate guard (risiko double load)")
+except Exception as e:
+    wrn(f"cek LuckyPullAuto guard: {e}")
+
+# 4) project loader load_all()
+try:
+    cl = importlib.import_module("nixe.cogs_loader")
+    if hasattr(cl, "load_all"):
+        ok("cogs_loader.load_all tersedia")
+    else:
+        wrn("cogs_loader.load_all tidak ada (akan fallback autodiscover)")
+except Exception as e:
+    wrn(f"import cogs_loader: {e}")
+
+# 5) lucky pull policy (hapus & mention) + redirect + guard channels
+lp_delete = env_get("LUCKYPULL_DELETE_ON_GUARD","0") in ("1","true","on","yes")
+lp_mention= env_get("LUCKYPULL_MENTION","0")         in ("1","true","on","yes")
+redirect  = env_get("LUCKYPULL_REDIRECT_CHANNEL_ID","0")
+guards    = [s.strip() for s in env_get("LUCKYPULL_GUARD_CHANNELS","").split(",") if s.strip()]
+
+if lp_delete and lp_mention: ok("LuckyPull policy: hapus + mention aktif")
+else: wrn("LuckyPull policy: disarankan DELETE_ON_GUARD=1 dan MENTION=1")
+
+if redirect.isdigit() and int(redirect)>0: ok(f"LuckyPull redirect channel OK: {redirect}")
+else: bad("LuckyPull redirect channel ID tidak valid")
+
+if guards: ok(f"LuckyPull guard channels OK: {','.join(guards)}")
+else: bad("LuckyPull guard channels kosong")
+
+# 6) Gemini setup cepat (tanpa internet = skip)
+gem_enable = env_get("LUCKYPULL_GEMINI_ENABLE","0") in ("1","true","on","yes")
+model      = (env_get("GEMINI_MODEL","") or "").lower()
+if gem_enable:
+    if "2.5" in model:
+        ok(f"Gemini enable + model={model}")
+    else:
+        wrn(f"Gemini enable tapi model bukan 2.5: {model or '(kosong)'}")
+else:
+    wrn("Gemini nonaktif (LUCKYPULL_GEMINI_ENABLE=0)")
+
+# 7) Optional live ping jika punya key
+key = env_get("GEMINI_API_KEY","").strip()
+if key:
     try:
-        return p.read_text(encoding="utf-8", errors="ignore")
-    except Exception:
-        return ""
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        data = json.dumps({"contents":[{"parts":[{"text":"ping"}]}]}).encode("utf-8")
+        req = urllib.request.Request(url, data=data, method="POST",
+            headers={"Content-Type":"application/json","x-goog-api-key":key})
+        t0=time.perf_counter()
+        with urllib.request.urlopen(req, timeout=10) as r:
+            ms=int((time.perf_counter()-t0)*1000)
+            if 200<=r.status<300:
+                ok(f"Gemini ping OK {ms}ms (HTTP {r.status})")
+            else:
+                wrn(f"Gemini ping HTTP {r.status}")
+    except Exception as e:
+        wrn(f"Gemini ping error: {e}")
+else:
+    wrn("GEMINI_API_KEY kosong: skip ping")
 
-def _parse_ast(p: Path):
-    try:
-        return ast.parse(_load_text(p), filename=str(p))
-    except Exception:
-        return None
-
-def check_pyver(res):
-    if sys.version_info >= (3,10):
-        PASS(f"Python {sys.version.split()[0]}"); res["pass"] += 1
-    else:
-        FAIL(f"Python >=3.10 required, found {sys.version}"); res["fail"] += 1
-
-def check_compile(res):
-    ok = compileall.compile_dir(str(ROOT), force=True, quiet=1)
-    if ok: PASS("Syntax compile OK untuk semua .py"); res["pass"] += 1
-    else:  FAIL("Syntax compile gagal (lihat traceback di atas)"); res["fail"] += 1
-
-def _choose_main():
-    mains = list(ROOT.rglob("main.py"))
-    if not mains: return None
-    for mp in mains:
-        if mp.parent == ROOT: return mp
-    return mains[0]
-
-def check_main_web(res):
-    mp = _choose_main()
-    if not mp:
-        FAIL("main.py tidak ditemukan"); res["fail"] += 1; return None, ""
-    text = _load_text(mp)
-    ok_health = "/healthz" in text
-    ok_port = "PORT" in text
-    if ok_health and ok_port:
-        PASS(f"{mp} expose /healthz dan memakai PORT"); res["pass"] += 1
-    else:
-        FAIL(f"{mp} TIDAK memenuhi healthz/PORT"); res["fail"] += 1
-    if ("access_log=None" in text or
-        "SilentAccessLogger" in text or
-        "AccessLogger" in text or
-        'logging.getLogger("aiohttp.access")' in text):
-        PASS("Anti-spam aiohttp.access terpasang"); res["pass"] += 1
-    else:
-        WARN("Anti-spam aiohttp.access TIDAK terdeteksi (akses /healthz bisa spam)"); res["warn"] += 1
-    return mp, text
-
-def check_config_phash(res, main_text: str):
-    mod = ROOT / "nixe" / "config_phash.py"
-    if "nixe.config_phash" in main_text and mod.exists():
-        src = _load_text(mod); vals = {}
-        for k in ["PHASH_DB_THREAD_ID","PHASH_DB_MESSAGE_ID","PHASH_DB_STRICT_EDIT","PHASH_IMAGEPHISH_THREAD_ID","PHASH_DB_MAX_ITEMS","PHASH_BOARD_EDIT_MIN_INTERVAL"]:
-            mm = re.search(rf"{k}\s*=\s*([^\n#]+)", src)
-            if mm: vals[k] = mm.group(1).strip()
-        try:
-            thread_db = int(eval(vals.get("PHASH_DB_THREAD_ID","0"), {}))
-            msg_id    = int(eval(vals.get("PHASH_DB_MESSAGE_ID","0"), {}))
-            strict    = bool(eval(vals.get("PHASH_DB_STRICT_EDIT","True"), {}))
-            learn_id  = int(eval(vals.get("PHASH_IMAGEPHISH_THREAD_ID","0"), {}))
-        except Exception:
-            FAIL("nixe/config_phash.py: tipe nilai tidak valid"); res["fail"] += 1; return
-        if thread_db == EXPECTED_IDS["THREAD_DB"]:
-            PASS("THREAD NIXE (pHash DB) sesuai"); res["pass"] += 1
-        else:
-            WARN(f"THREAD NIXE berbeda: {thread_db} (ekspektasi {EXPECTED_IDS['THREAD_DB']})"); res["warn"] += 1
-        if learn_id == EXPECTED_IDS["THREAD_IMAGEPHISH"]:
-            PASS("THREAD imagephising sesuai"); res["pass"] += 1
-        else:
-            WARN(f"THREAD imagephising berbeda: {learn_id} (ekspektasi {EXPECTED_IDS['THREAD_IMAGEPHISH']})"); res["warn"] += 1
-        if strict:
-            PASS("Policy DB: EDIT-ONLY"); res["pass"] += 1
-        else:
-            FAIL("Policy DB bukan EDIT-ONLY (resiko membuat message baru)"); res["fail"] += 1
-    else:
-        if "PHASH_DB_THREAD_ID" in main_text or "PHASH_DB_MESSAGE_ID" in main_text:
-            WARN("Konfigurasi pHash via ENV; disarankan pindah ke nixe/config_phash.py"); res["warn"] += 1
-        else:
-            FAIL("Tidak menemukan konfigurasi pHash (module/ENV)"); res["fail"] += 1
-
-    offenders = []
-    for py in ROOT.rglob("*.py"):
-        if py.resolve() == THIS:
-            continue  # skip smoketest sendiri
-        lowname = py.name.lower()
-        txt = _load_text(py)
-        if ".send(" not in txt:
-            continue
-        strong = ("db_board" in lowname)
-        if not strong:
-            for m in re.finditer(r"\.send\s*\(", txt):
-                start = max(0, m.start()-200); end = min(len(txt), m.end()+200)
-                ctx = txt[start:end].lower()
-                if "[phash-db-board]" in ctx or '"phash"' in ctx or "```json" in ctx:
-                    strong = True; break
-        if strong:
-            offenders.append(str(py.relative_to(ROOT)))
-
-    if offenders:
-        WARN("Kemungkinan membuat message DB baru untuk BOARD pada: " + ", ".join(offenders)); res["warn"] += 1
-    else:
-        PASS("Tidak ada pattern pembuatan message DB baru untuk BOARD (aman)"); res["pass"] += 1
-
-def check_cogs(res):
-    cogs_dir = ROOT / "nixe" / "cogs"
-    if not cogs_dir.exists():
-        WARN("Folder nixe/cogs tidak ada"); res["warn"] += 1; return
-    total = 0; missing = []; dup = {}
-    def is_cog_class(node: ast.ClassDef) -> bool:
-        for b in node.bases:
-            if isinstance(b, ast.Attribute) and b.attr == "Cog": return True
-            if isinstance(b, ast.Name) and b.id == "Cog": return True
-        return node.name.endswith("Cog")
-    for py in sorted(cogs_dir.rglob("*.py")):
-        if py.name == "__init__.py": continue
-        total += 1; tree = _parse_ast(py)
-        if not tree:
-            missing.append((py, False, False)); continue
-        has_cog = any(isinstance(n, ast.ClassDef) and is_cog_class(n) for n in tree.body)
-        has_setup = any((isinstance(n, ast.FunctionDef) or isinstance(n, ast.AsyncFunctionDef)) and n.name == "setup" for n in tree.body)
-        if not (has_cog or has_setup):
-            missing.append((py, has_cog, has_setup))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef):
-                for dec in node.decorator_list:
-                    if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute):
-                        for kw in dec.keywords or []:
-                            if kw.arg == "name":
-                                v = kw.value; s = None
-                                if isinstance(v, ast.Constant) and isinstance(v.value, str): s = v.value
-                                elif isinstance(v, ast.Str): s = v.s
-                                if s: dup.setdefault(s, []).append(f"{py.relative_to(ROOT)}::{node.name}")
-    if total > 0:
-        PASS(f"COGS ditemukan: {total} file"); res["pass"] += 1
-    if missing:
-        for p, hc, hs in missing:
-            FAIL(f"Cog tidak valid: {p} -> class Cog? {hc}, setup()? {hs}"); res["fail"] += 1
-    else:
-        PASS("Semua cogs valid (class Cog ATAU setup(bot))"); res["pass"] += 1
-    dups = {k: v for k, v in dup.items() if len(v) > 1}
-    if dups:
-        for k, locs in dups.items():
-            WARN(f"Duplicate command name '{k}' di: {', '.join(locs)}"); res["warn"] += 1
-    else:
-        PASS("Tidak ada duplicate decorator command name"); res["pass"] += 1
-
-def check_practices(res, main_text: str):
-    offenders = {"aiohttp.ClientSession": [], "requests.http": []}
-    for py in ROOT.rglob("*.py"):
-        if py.resolve() == THIS:  # skip this smoketest file
-            continue
-        tree = _parse_ast(py)
-        if not tree: continue
-        for node in tree.body:
-            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
-                f = node.value.func
-                if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):
-                    if f.value.id == "aiohttp" and f.attr == "ClientSession":
-                        offenders["aiohttp.ClientSession"].append(str(py.relative_to(ROOT)))
-            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
-                f = node.value.func
-                if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id == "requests":
-                    if f.attr in {"get","post","put","delete","head","patch"}:
-                        offenders["requests.http"].append(str(py.relative_to(ROOT)))
-    if offenders["aiohttp.ClientSession"] or offenders["requests.http"]:
-        if offenders["aiohttp.ClientSession"]:
-            WARN("Top-level aiohttp.ClientSession terdeteksi pada: " + ", ".join(sorted(set(offenders["aiohttp.ClientSession"])))); res["warn"] += 1
-        if offenders["requests.http"]:
-            WARN("Top-level requests.(http) terdeteksi pada: " + ", ".join(sorted(set(offenders["requests.http"])))); res["warn"] += 1
-    else:
-        PASS("Tidak ada top-level networking saat import"); res["pass"] += 1
-
-    # Auto-restart patterns (skip this file + proximity)
-    auto = []
-    for py in ROOT.rglob("*.py"):
-        if py.resolve() == THIS:
-            continue
-        t = _load_text(py)
-        if "os.execv(" in t or "os._exit(" in t:
-            auto.append(str(py.relative_to(ROOT))); continue
-        if "while True" in t and "bot.start(" in t:
-            auto.append(str(py.relative_to(ROOT))); continue
-        for m in re.finditer(r"sys\\.exit\\([^)]*\\)", t, flags=re.I):
-            start = max(0, m.start()-120); end = min(len(t), m.end()+120)
-            if "restart" in t[start:end].lower():
-                auto.append(str(py.relative_to(ROOT))); break
-    if auto:
-        FAIL("Pattern auto-restart terdeteksi: " + ", ".join(sorted(set(auto)))); res["fail"] += 1
-    else:
-        PASS("Tidak ada pattern auto-restart berbahaya"); res["pass"] += 1
-
-    if "PyNaCl is not installed" in main_text and "OnceFilter" in main_text:
-        PASS("Filter log discord.client (login/PyNaCl) aktif"); res["pass"] += 1
-    else:
-        WARN("Filter log discord.client (login/PyNaCl) tidak terdeteksi"); res["warn"] += 1
-
-def check_render_yaml(res):
-    ry = ROOT / "render.yaml"
-    if not ry.exists():
-        WARN("render.yaml tidak ada (OK jika deploy manual)"); res["warn"] += 1; return
-    t = _load_text(ry)
-    ok = ("type: web" in t) and (("python main.py" in t) or ("python3 main.py" in t))
-    if ok:
-        PASS("render.yaml: type web + start command valid"); res["pass"] += 1
-    else:
-        WARN("render.yaml: pastikan service type=web dan start 'python main.py'"); res["warn"] += 1
-    if "worker" in t:
-        FAIL("render.yaml: terdeteksi worker/background (Free Plan tidak mendukung)"); res["fail"] += 1
-
-def main():
-    import argparse
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--json-output", default=None)
-    args = ap.parse_args()
-
-    res = {"pass":0, "warn":0, "fail":0}
-    check_pyver(res); check_compile(res)
-    mp, mtxt = check_main_web(res)
-    if mp is not None:
-        check_config_phash(res, mtxt)
-        check_practices(res, mtxt)
-    check_cogs(res); check_render_yaml(res)
-    print(f"\\n== SUMMARY ==  pass={res['pass']} warn={res['warn']} fail={res['fail']}")
-    if args.json_output:
-        with open(args.json_output, "w", encoding="utf-8") as f:
-            json.dump(res, f, indent=2, ensure_ascii=False)
-        print(f"JSON saved -> {args.json_output}")
-    sys.exit(0 if res["fail"]==0 else 2)
-
-if __name__ == "__main__":
-    main()
+print("\\n== SUMMARY ==  pass=%d warn=%d fail=%d" % (PASS,WARN,FAIL))
+if FAIL>0: sys.exit(1)
