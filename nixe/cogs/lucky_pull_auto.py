@@ -15,54 +15,41 @@ def _load_cfg() -> dict:
     except Exception:
         return {}
 
-def _get_env_model_default(default: str) -> str:
-    # Prefer runtime_env.json via helper if available, else OS env; fallback to default
+def _cfg_str(name: str, default: str | None = None) -> str | None:
     try:
         from nixe.config.runtime_env import cfg_str
-        val = cfg_str("GEMINI_MODEL", None)
-        if val: return val
+        v = cfg_str(name, None)
+        if v not in (None, "", "null", "None"):
+            return str(v)
     except Exception:
         pass
-    return os.getenv("GEMINI_MODEL", default)
+    v = os.getenv(name, default if default is not None else "")
+    return v if v not in (None, "", "null", "None") else None
 
 class LuckyPullAuto(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         cfg = _load_cfg().get("lucky_guard", {})
         g = cfg.get("gemini", {}) or {}
-        # Prefer env for API key & model; fallback to config JSON
-        key = None
-        try:
-            from nixe.config.runtime_env import cfg_str
-            key = cfg_str("GEMINI_API_KEY", None)
-        except Exception:
-            key = None
-        if not key:
-            key = os.getenv("GEMINI_API_KEY")
-        self.api_key = key
+        self.enable = bool(g.get("enable", False))
 
-        default_model = str(g.get("model", "gemini-2.5-flash"))
-        self.model = _get_env_model_default(default_model)
+        key = _cfg_str("GEMINI_API_KEY")
+        self.api_key = key
+        self.model = _cfg_str("GEMINI_MODEL", str(g.get("model", "gemini-2.5-flash"))) or "gemini-2.5-flash"
         try:
             self.timeout_ms = int(g.get("timeout_ms", 1200))
         except Exception:
             self.timeout_ms = 1200
 
+        self.debug = _cfg_str("LUCKYPULL_DEBUG") in ("1", "true", "yes", "on")
+
     @commands.Cog.listener("on_message")
     async def _on_message(self, msg: discord.Message):
-        if msg.author.bot or not msg.attachments:
+        if not self.enable or msg.author.bot or not msg.attachments:
             return
-        # feature enable flag via config JSON
-        cfg = _load_cfg().get("lucky_guard", {})
-        g = cfg.get("gemini", {}) or {}
-        if not bool(g.get("enable", False)):
-            return
-
-        # Only consider images
         images = [a for a in msg.attachments if (a.content_type or "").startswith("image/")]
         if not images:
             return
-
         try:
             data = await images[0].read(use_cached=True)
         except Exception:
@@ -76,7 +63,11 @@ class LuckyPullAuto(commands.Cog):
             try:
                 result = await classify_lucky_pull([data], api_key=self.api_key, model=self.model, timeout_ms=self.timeout_ms)
                 cache[msg.id] = {"label": result.get("label","other"), "conf": float(result.get("confidence",0.0))}
-            except Exception:
+                if self.debug:
+                    log.warning("[lpa:debug] hint msg=%s label=%s conf=%.3f model=%s", msg.id, result.get("label"), float(result.get("confidence",0.0)), self.model)
+            except Exception as e:
+                if self.debug:
+                    log.warning("[lpa:debug] gemini error: %s", e)
                 pass
         asyncio.create_task(worker())
 
