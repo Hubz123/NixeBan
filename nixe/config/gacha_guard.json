@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "lucky_guard": {
+    "enable": true,
+    "guard_channels": [
+      886534544688308265
+    ],
+    "redirect_channel": 1293200121063936052,
+    "review_thread_id": null,
+    "min_confidence_delete": 0.85,
+    "min_confidence_redirect": 0.6,
+    "dm_user_on_delete": false
+  }
+}
