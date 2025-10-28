@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import os, json, pathlib, logging, asyncio
+import os, json, pathlib, logging, asyncio, time
 from typing import Set
 
 import discord
@@ -8,6 +8,16 @@ from discord.ext import commands
 
 from nixe.helpers.persona import yandere
 from nixe.helpers.lucky_classifier import classify_image_meta
+
+# -*- coding: utf-8 -*-
+# Patch v15: robust image detection (handles missing content_type by filename extension)
+IMAGE_EXTS = ('.png','.jpg','.jpeg','.webp','.gif','.bmp','.heic','.heif','.tiff','.tif')
+def _is_image(att):
+    ct = (getattr(att, 'content_type', None) or '').lower()
+    if ct.startswith('image/'):
+        return True
+    name = (getattr(att, 'filename', '') or '').lower()
+    return name.endswith(IMAGE_EXTS)
 
 log = logging.getLogger(__name__)
 CFG_PATH = pathlib.Path(__file__).resolve().parents[1] / "config" / "gacha_guard.json"
@@ -57,16 +67,14 @@ def _parse_id_list(s: str | None) -> Set[int]:
     return out
 
 class LuckyPullGuard(commands.Cog):
-    """Yandere persona (soft/agro/sharp), random-only.
-    Strict delete on guard channels when enabled via ENV (LUCKYPULL_DELETE_ON_GUARD=1).
-    Waits for Gemini hint up to LUCKYPULL_MAX_LATENCY_MS (clamped <= 2000 ms).
+    """Yandere persona; strict delete on guard channels if enabled.
+    This version re-reads runtime_env periodically so flags don't depend on init order.
     """
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         cfg = _load_cfg().get("lucky_guard", {})
         self.enable = bool(cfg.get("enable", True))
 
-        # Base channels from JSON + ENV override/additions
         base_json = {int(x) for x in cfg.get("guard_channels", []) if str(x).isdigit()}
         env_main = _parse_id_list(_cfg_str("LUCKYPULL_GUARD_CHANNELS"))
         env_extra = _parse_id_list(_cfg_str("LUCKYPULL_GUARD_CHANNELS_EXTRA"))
@@ -74,34 +82,46 @@ class LuckyPullGuard(commands.Cog):
 
         self.redirect_channel = int(cfg.get("redirect_channel", 0)) or None
 
-        # thresholds (JSON first, can be overridden by ENV)
-        self.min_conf_delete = float(cfg.get("min_confidence_delete", 0.85))
-        self.min_conf_redirect = float(cfg.get("min_confidence_redirect", 0.60))
-        self.min_conf_delete = _cfg_float("LUCKYPULL_DELETE_THRESHOLD", self.min_conf_delete)
-        self.min_conf_redirect = _cfg_float("LUCKYPULL_REDIRECT_THRESHOLD", self.min_conf_redirect)
+        # Store JSON defaults; env can override at runtime
+        self._json_delete = float(cfg.get("min_confidence_delete", 0.85))
+        self._json_redirect = float(cfg.get("min_confidence_redirect", 0.60))
 
-        # Gemini hint threshold
-        self.gemini_lucky_thr = _cfg_float("GEMINI_LUCKY_THRESHOLD", 0.65)
-
-        # Gemini wait (respect <= 2000ms hard cap)
         g = cfg.get("gemini", {}) or {}
-        wait_default = int(g.get("timeout_ms", 1200)) if bool(g.get("enable", False)) else 0
-        self.wait_ms = int(_cfg_float("LUCKYPULL_MAX_LATENCY_MS", float(wait_default)))
-        if self.wait_ms > 2000:
-            self.wait_ms = 2000
-        if self.wait_ms < 0:
-            self.wait_ms = 0
+        self._json_wait = int(g.get("timeout_ms", 1200)) if bool(g.get("enable", False)) else 0
 
-        # Strict delete toggle (from ENV) - applies to ALL guard channels when "1"
-        self.strict_delete_on_guard = (_cfg_str("LUCKYPULL_DELETE_ON_GUARD") in ("1","true","yes","on"))
+        # Runtime copies (will be refreshed)
+        self.min_conf_delete = self._json_delete
+        self.min_conf_redirect = self._json_redirect
+        self.wait_ms = self._json_wait
+        self.strict_delete_on_guard = False
+        self.gemini_lucky_thr = 0.65
+        self.debug = False
 
-        # Debug
-        self.debug = _cfg_str("LUCKYPULL_DEBUG") in ("1","true","yes","on")
+        self._last_refresh = 0.0
+        self._refresh_env(force=True)
 
         log.warning("[lpg] guard_channels=%s redirect=%s wait_ms=%s delete>=%.2f redirect>=%.2f strict_on_guard=%s gem_thr=%.2f",
                     sorted(self.guard_channels), self.redirect_channel, self.wait_ms,
                     self.min_conf_delete, self.min_conf_redirect,
                     self.strict_delete_on_guard, self.gemini_lucky_thr)
+
+    def _refresh_env(self, force: bool = False):
+        now = time.monotonic()
+        if not force and now - self._last_refresh < 5.0:
+            return
+        self._last_refresh = now
+        # Thresholds
+        self.min_conf_delete = _cfg_float("LUCKYPULL_DELETE_THRESHOLD", self._json_delete)
+        self.min_conf_redirect = _cfg_float("LUCKYPULL_REDIRECT_THRESHOLD", self._json_redirect)
+        # Wait (clamped)
+        self.wait_ms = int(_cfg_float("LUCKYPULL_MAX_LATENCY_MS", float(self._json_wait)))
+        if self.wait_ms > 2000: self.wait_ms = 2000
+        if self.wait_ms < 0: self.wait_ms = 0
+        # Strict flag + Gemini lucky confidence
+        self.strict_delete_on_guard = (_cfg_str("LUCKYPULL_DELETE_ON_GUARD") in ("1","true","yes","on"))
+        self.gemini_lucky_thr = _cfg_float("GEMINI_LUCKY_THRESHOLD", 0.65)
+        # Debug
+        self.debug = _cfg_str("LUCKYPULL_DEBUG") in ("1","true","yes","on")
 
     async def _pull_auto_hint(self, msg_id: int) -> dict:
         cache = getattr(self.bot, "_lp_auto", None)
@@ -127,7 +147,10 @@ class LuckyPullGuard(commands.Cog):
             if self.guard_channels and msg.channel.id not in self.guard_channels:
                 return
 
-            images = [a for a in msg.attachments if (a.content_type or "").startswith("image/")]
+            # Re-read env periodically so late-loaded runtime_env values apply
+            self._refresh_env()
+
+            images = [a for a in msg.attachments if _is_image(a)]
             if not images:
                 return
 
@@ -145,8 +168,6 @@ class LuckyPullGuard(commands.Cog):
 
             # Decision
             action = "none"
-
-            # If strict-on-guard: escalate delete when redirect threshold is met OR gemini says lucky with conf >= gem_thr
             if self.strict_delete_on_guard and (
                 best_conf >= self.min_conf_redirect or
                 (gem_label == "lucky_pull" and (gem_conf or 0.0) >= self.gemini_lucky_thr)
@@ -158,9 +179,10 @@ class LuckyPullGuard(commands.Cog):
                 action = "redirect"
 
             if self.debug:
-                log.warning("[lpg:debug] chan=%s(%s) best=%.3f files=%s gem_hint=(%s, %.3f) action=%s",
+                log.warning("[lpg:debug] chan=%s(%s) best=%.3f files=%s gem_hint=(%s, %.3f) action=%s thr(del=%.2f redir=%.2f gem=%.2f) wait=%sms",
                             msg.channel.id, getattr(msg.channel, "name", "?"),
-                            best_conf, per_file, gem_label, gem_conf or 0.0, action)
+                            best_conf, per_file, gem_label, gem_conf or 0.0, action,
+                            self.min_conf_delete, self.min_conf_redirect, self.gemini_lucky_thr, self.wait_ms)
 
             if action == "delete":
                 reason = "deteksi lucky pull"

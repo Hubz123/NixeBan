@@ -5,6 +5,16 @@ import discord
 from discord.ext import commands
 from nixe.helpers.gemini_bridge import classify_lucky_pull
 
+# -*- coding: utf-8 -*-
+# Patch v15: robust image detection (handles missing content_type by filename extension)
+IMAGE_EXTS = ('.png','.jpg','.jpeg','.webp','.gif','.bmp','.heic','.heif','.tiff','.tif')
+def _is_image(att):
+    ct = (getattr(att, 'content_type', None) or '').lower()
+    if ct.startswith('image/'):
+        return True
+    name = (getattr(att, 'filename', '') or '').lower()
+    return name.endswith(IMAGE_EXTS)
+
 log = logging.getLogger(__name__)
 CFG_PATH = pathlib.Path(__file__).resolve().parents[1] / "config" / "gacha_guard.json"
 
@@ -47,7 +57,7 @@ class LuckyPullAuto(commands.Cog):
     async def _on_message(self, msg: discord.Message):
         if not self.enable or msg.author.bot or not msg.attachments:
             return
-        images = [a for a in msg.attachments if (a.content_type or "").startswith("image/")]
+        images = [a for a in msg.attachments if _is_image(a)]
         if not images:
             return
         try:
