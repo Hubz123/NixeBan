@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "lucky_guard": {
     "enable": true,
     "guard_channels": [
@@ -9,6 +9,11 @@
     "review_thread_id": null,
     "min_confidence_delete": 0.85,
     "min_confidence_redirect": 0.6,
-    "dm_user_on_delete": false
+    "dm_user_on_delete": false,
+    "gemini": {
+      "enable": true,
+      "model": "gemini-1.5-flash",
+      "timeout_ms": 1200
+    }
   }
 }
