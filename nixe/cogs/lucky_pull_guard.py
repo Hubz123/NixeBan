@@ -1,72 +1,25 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
-import os, re, logging
-from typing import Set
+import os, json
+from pathlib import Path
 import discord
 from discord.ext import commands
-import os
-DELETE_ON_GUARD = os.getenv('LUCKYPULL_DELETE_ON_GUARD','0').strip() == '1'
-try:
-    from nixe.context_flags import mark_skip_phash
-except Exception:
-    def mark_skip_phash(_): return None
-log = logging.getLogger(__name__)
 
-def _ids(env: str) -> Set[int]:
-    raw = os.getenv(env, "") or ""
-    s: Set[int] = set()
-    for p in raw.split(","):
-        p = p.strip()
-        if not p: continue
-        try: s.add(int(p))
-        except ValueError: pass
-    return s
-
-class LuckyPullGuard(commands.Cog):
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-        self.strict = (os.getenv("LUCKYPULL_STRICT_MODE", "1") == "1")
-        self.allow_channels = _ids("LUCKYPULL_ALLOW_CHANNELS")
-        self.guard_channels = _ids("LUCKYPULL_GUARD_CHANNELS")
-        self._pat = re.compile(r"(?ix)(lucky\s*pull|wish|gacha|pull\s*\d+x|\d+x\s*pull|banner\s*result|hasil\s*pull|convene|warp)")
-
-    def _target(self, ch_id: int) -> bool:
-        if ch_id in self.allow_channels: return False
-        return (ch_id in self.guard_channels) if self.guard_channels else True
-
-    def _looks(self, m: discord.Message) -> bool:
-        if not self.strict: return False
-        for a in m.attachments:
-            if self._pat.search((a.filename or "").lower()): return True
-        return bool(m.content and self._pat.search(m.content.lower()))
-
-    @commands.Cog.listener()
-    async def on_message(self, m: discord.Message):
-        if m.author.bot: return
-        ch = m.channel
-        if not isinstance(ch, (discord.TextChannel, discord.Thread)): return
-        if not self._target(ch.id): return
-        if not self._looks(m): return
-        try: mark_skip_phash(m.id)
-        except Exception: pass
-        try:
-            await m.delete(reason="Lucky Pull in non-allowed channel")
-            log.info("[lucky_pull_guard] deleted in #%s (%s)", getattr(ch, "name", "?"), ch.id)
-        except Exception: log.debug("[lucky_pull_guard] delete failed", exc_info=True)
-
-async def setup(bot: commands.Bot):
-    # Avoid duplicate registration if loader already added this cog
-    if 'LuckyPullGuard' in getattr(bot, 'cogs', {}):
-        return
+def _get_env(key: str, default: str = "0") -> str:
+    v = os.getenv(key)
+    if v is not None:
+        return v
     try:
-        await bot.add_cog(LuckyPullGuard(bot))
+        envp = Path(__file__).resolve().parents[1] / "config" / "runtime_env.json"
+        data = json.loads(envp.read_text(encoding="utf-8"))
+        v = data.get(key, default)
+        return "" if v is None else str(v)
     except Exception:
-        # If already loaded or another race, swallow to keep startup healthy
-        import logging; logging.getLogger(__name__).debug("setup: LuckyPullGuard already loaded or failed softly", exc_info=True)
+        return default
 
+DELETE_ON_GUARD = _get_env("LUCKYPULL_DELETE_ON_GUARD","0").strip() == "1"
 
-
-async def _nixe_delete_and_mention(_bot, message, redirect_id: int):
-    import discord
+async def _nixe_delete_and_mention(bot, message: discord.Message, redirect_id: int):
     try:
         await message.delete()
     except Exception:
@@ -77,14 +30,35 @@ async def _nixe_delete_and_mention(_bot, message, redirect_id: int):
     except Exception:
         dest = None
     mention = message.author.mention if getattr(message, "author", None) else ""
-    if dest is not None:
+    text = f"{mention} lucky pull pindah ke <#{redirect_id}> ya 🙏" if dest is None else f"{mention} lucky pull pindah ke {dest.mention} ya 🙏"
+    try:
+        await message.channel.send(text, delete_after=15)
+    except Exception:
+        pass
+
+class LuckyPullDeleteMentionEnforcer(commands.Cog):
+    """Jika DELETE_ON_GUARD=1, hapus & mention di guard channels."""
+    def __init__(self, bot): self.bot = bot
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if not DELETE_ON_GUARD or not message or (getattr(message, "author", None) and message.author.bot):
+            return
         try:
-            await _nixe_delete_and_mention(bot, message, int(os.getenv('LUCKYPULL_REDIRECT_CHANNEL_ID','0') or 0)) if DELETE_ON_GUARD else (await message.channel.send(f"{mention} lucky pull pindah ke {dest.mention} ya 🙏", delete_after=15))
-        except Exception:
-            pass
-    else:
-        try:
-            await message.channel.send(f"{mention} lucky pull pindah ke <#{redirect_id}> ya 🙏", delete_after=15)
+            guards = [s.strip() for s in _get_env("LUCKYPULL_GUARD_CHANNELS","").split(",") if s.strip().isdigit()]
+            redirect_id = int((_get_env("LUCKYPULL_REDIRECT_CHANNEL_ID","0") or "0").strip())
+            if not redirect_id:
+                return
+            # skip if already in redirect channel (anti-loop)
+            if message.channel and message.channel.id == redirect_id:
+                return
+            if str(message.channel.id) in guards:
+                await _nixe_delete_and_mention(self.bot, message, redirect_id)
         except Exception:
             pass
 
+async def setup(bot):
+    try:
+        await bot.add_cog(LuckyPullDeleteMentionEnforcer(bot))
+    except Exception:
+        pass
