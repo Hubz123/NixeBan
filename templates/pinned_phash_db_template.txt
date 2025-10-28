@@ -1,4 +1,1 @@
-NIXE_PHASH_DB_V1
-```json
-{"phash":[]}
-```
+# pHash DB embed template

@@ -1,1 +1,2 @@
-# added to mark package
+# smoke-safe init
+__all__ = []

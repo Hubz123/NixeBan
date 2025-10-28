@@ -1,1 +1,2 @@
-from .webui import register_webui_builtin
+# smoke-safe init
+__all__ = []

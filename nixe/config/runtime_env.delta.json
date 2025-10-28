@@ -1,0 +1,5 @@
+{
+  "LUCKYPULL_GEMINI_ENABLE": "1",
+  "LUCKYPULL_GEMINI_MODEL": "gemini-2.5-flash",
+  "LUCKYPULL_GEMINI_FALLBACK": "gemini-2.0-flash"
+}

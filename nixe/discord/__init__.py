@@ -1,1 +1,2 @@
-# nixe.discord package
+# smoke-safe init
+__all__ = []

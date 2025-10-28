@@ -3,6 +3,8 @@ import os, re, logging
 from typing import Set
 import discord
 from discord.ext import commands
+import os
+DELETE_ON_GUARD = os.getenv('LUCKYPULL_DELETE_ON_GUARD','0').strip() == '1'
 try:
     from nixe.context_flags import mark_skip_phash
 except Exception:
@@ -60,3 +62,29 @@ async def setup(bot: commands.Bot):
     except Exception:
         # If already loaded or another race, swallow to keep startup healthy
         import logging; logging.getLogger(__name__).debug("setup: LuckyPullGuard already loaded or failed softly", exc_info=True)
+
+
+
+async def _nixe_delete_and_mention(_bot, message, redirect_id: int):
+    import discord
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    dest = None
+    try:
+        dest = message.guild.get_channel(redirect_id)
+    except Exception:
+        dest = None
+    mention = message.author.mention if getattr(message, "author", None) else ""
+    if dest is not None:
+        try:
+            await _nixe_delete_and_mention(bot, message, int(os.getenv('LUCKYPULL_REDIRECT_CHANNEL_ID','0') or 0)) if DELETE_ON_GUARD else (await message.channel.send(f"{mention} lucky pull pindah ke {dest.mention} ya 🙏", delete_after=15))
+        except Exception:
+            pass
+    else:
+        try:
+            await message.channel.send(f"{mention} lucky pull pindah ke <#{redirect_id}> ya 🙏", delete_after=15)
+        except Exception:
+            pass
+

@@ -1,4 +1,2 @@
-NIXE_LINK_BLACKLIST_V1
-```json
-{"domains": ["example.com", "bad.example"]}
-```
+# One domain per line
+free-nitro.xyz
