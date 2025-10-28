@@ -9,8 +9,12 @@ from discord.ext import commands
 from nixe.helpers.persona import yandere
 from nixe.helpers.lucky_classifier import classify_image_meta
 
+log = logging.getLogger(__name__)
+CFG_PATH = pathlib.Path(__file__).resolve().parents[1] / "config" / "gacha_guard.json"
+
 # -*- coding: utf-8 -*-
-# Patch v15: robust image detection (handles missing content_type by filename extension)
+# Patch v16: robust image detection (handles missing content_type) + boot env refresh
+import asyncio, time
 IMAGE_EXTS = ('.png','.jpg','.jpeg','.webp','.gif','.bmp','.heic','.heif','.tiff','.tif')
 def _is_image(att):
     ct = (getattr(att, 'content_type', None) or '').lower()
@@ -19,8 +23,6 @@ def _is_image(att):
     name = (getattr(att, 'filename', '') or '').lower()
     return name.endswith(IMAGE_EXTS)
 
-log = logging.getLogger(__name__)
-CFG_PATH = pathlib.Path(__file__).resolve().parents[1] / "config" / "gacha_guard.json"
 
 def _load_cfg() -> dict:
     try:
@@ -68,7 +70,9 @@ def _parse_id_list(s: str | None) -> Set[int]:
 
 class LuckyPullGuard(commands.Cog):
     """Yandere persona; strict delete on guard channels if enabled.
-    This version re-reads runtime_env periodically so flags don't depend on init order.
+    - Robust image detection (content_type fallback to filename ext)
+    - Dynamic runtime_env refresh (boot + periodic + pre-decision)
+    - Boot env log after refresh for clear visibility
     """
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -82,14 +86,13 @@ class LuckyPullGuard(commands.Cog):
 
         self.redirect_channel = int(cfg.get("redirect_channel", 0)) or None
 
-        # Store JSON defaults; env can override at runtime
+        # JSON defaults; env may override at runtime
         self._json_delete = float(cfg.get("min_confidence_delete", 0.85))
         self._json_redirect = float(cfg.get("min_confidence_redirect", 0.60))
-
         g = cfg.get("gemini", {}) or {}
         self._json_wait = int(g.get("timeout_ms", 1200)) if bool(g.get("enable", False)) else 0
 
-        # Runtime copies (will be refreshed)
+        # Runtime values (refreshed)
         self.min_conf_delete = self._json_delete
         self.min_conf_redirect = self._json_redirect
         self.wait_ms = self._json_wait
@@ -97,13 +100,29 @@ class LuckyPullGuard(commands.Cog):
         self.gemini_lucky_thr = 0.65
         self.debug = False
 
+        # Immediate refresh at boot
         self._last_refresh = 0.0
         self._refresh_env(force=True)
 
+        # Print boot line (may still show defaults if env not ready yet)
         log.warning("[lpg] guard_channels=%s redirect=%s wait_ms=%s delete>=%.2f redirect>=%.2f strict_on_guard=%s gem_thr=%.2f",
                     sorted(self.guard_channels), self.redirect_channel, self.wait_ms,
                     self.min_conf_delete, self.min_conf_redirect,
                     self.strict_delete_on_guard, self.gemini_lucky_thr)
+
+        # Schedule a post-ready refresh + log to show final values after env_admin loaded
+        bot.loop.create_task(self._post_ready_log())
+
+    async def _post_ready_log(self):
+        try:
+            await self.bot.wait_until_ready()
+            await asyncio.sleep(1.0)
+            self._refresh_env(force=True)
+            log.warning("[lpg:env] (post-ready) wait_ms=%s delete>=%.2f redirect>=%.2f strict_on_guard=%s gem_thr=%.2f",
+                        self.wait_ms, self.min_conf_delete, self.min_conf_redirect,
+                        self.strict_delete_on_guard, self.gemini_lucky_thr)
+        except Exception:
+            pass
 
     def _refresh_env(self, force: bool = False):
         now = time.monotonic()
@@ -117,27 +136,11 @@ class LuckyPullGuard(commands.Cog):
         self.wait_ms = int(_cfg_float("LUCKYPULL_MAX_LATENCY_MS", float(self._json_wait)))
         if self.wait_ms > 2000: self.wait_ms = 2000
         if self.wait_ms < 0: self.wait_ms = 0
-        # Strict flag + Gemini lucky confidence
+        # Strict + Gemini lucky threshold
         self.strict_delete_on_guard = (_cfg_str("LUCKYPULL_DELETE_ON_GUARD") in ("1","true","yes","on"))
         self.gemini_lucky_thr = _cfg_float("GEMINI_LUCKY_THRESHOLD", 0.65)
         # Debug
         self.debug = _cfg_str("LUCKYPULL_DEBUG") in ("1","true","yes","on")
-
-    async def _pull_auto_hint(self, msg_id: int) -> dict:
-        cache = getattr(self.bot, "_lp_auto", None)
-        if cache and msg_id in cache:
-            return cache.pop(msg_id)
-        if self.wait_ms <= 0:
-            return {}
-        remain = self.wait_ms/1000.0
-        step = 0.05
-        while remain > 0:
-            await asyncio.sleep(step)
-            remain -= step
-            cache = getattr(self.bot, "_lp_auto", None)
-            if cache and msg_id in cache:
-                return cache.pop(msg_id)
-        return {}
 
     @commands.Cog.listener("on_message")
     async def _on_message(self, msg: discord.Message):
@@ -147,16 +150,21 @@ class LuckyPullGuard(commands.Cog):
             if self.guard_channels and msg.channel.id not in self.guard_channels:
                 return
 
-            # Re-read env periodically so late-loaded runtime_env values apply
+            # Ensure env is fresh for decisions
             self._refresh_env()
 
             images = [a for a in msg.attachments if _is_image(a)]
             if not images:
                 return
 
-            hint = await self._pull_auto_hint(msg.id)
-            gem_label = hint.get("label") if hint else None
-            gem_conf = float(hint.get("conf", 0.0)) if hint else None
+            # Pull Gemini auto-hint from cache (populated by lucky_pull_auto)
+            cache = getattr(self.bot, "_lp_auto", None)
+            gem_label = None
+            gem_conf = None
+            if cache and msg.id in cache:
+                hint = cache.pop(msg.id)
+                gem_label = hint.get("label")
+                gem_conf = float(hint.get("conf", 0.0))
 
             best_conf = 0.0
             per_file = []
@@ -180,14 +188,14 @@ class LuckyPullGuard(commands.Cog):
 
             if self.debug:
                 log.warning("[lpg:debug] chan=%s(%s) best=%.3f files=%s gem_hint=(%s, %.3f) action=%s thr(del=%.2f redir=%.2f gem=%.2f) wait=%sms",
-                            msg.channel.id, getattr(msg.channel, "name", "?"),
+                            msg.channel.id, getattr(msg.channel, 'name', '?'),
                             best_conf, per_file, gem_label, gem_conf or 0.0, action,
                             self.min_conf_delete, self.min_conf_redirect, self.gemini_lucky_thr, self.wait_ms)
 
             if action == "delete":
                 reason = "deteksi lucky pull"
                 user_mention = msg.author.mention
-                channel_name = f"#{getattr(msg.channel, 'name', '?')}"
+                channel_name = f"#{{getattr(msg.channel, 'name', '?')}}"
                 line = yandere(user=user_mention, channel=channel_name, reason=reason)
                 await msg.delete()
                 await msg.channel.send(line, delete_after=10)
@@ -195,7 +203,7 @@ class LuckyPullGuard(commands.Cog):
                     try:
                         target = msg.guild.get_channel(self.redirect_channel) or await self.bot.fetch_channel(self.redirect_channel)
                         files = [await a.to_file() for a in images]
-                        await target.send(content=f"{user_mention} dipindah ke sini karena {reason}.", files=files)
+                        await target.send(content=f"{{user_mention}} dipindah ke sini karena {{reason}}.", files=files)
                     except Exception:
                         pass
                 return
@@ -204,7 +212,7 @@ class LuckyPullGuard(commands.Cog):
                 try:
                     target = msg.guild.get_channel(self.redirect_channel) or await self.bot.fetch_channel(self.redirect_channel)
                     files = [await a.to_file() for a in images]
-                    await target.send(content=f"{msg.author.mention} kontenmu dipindah (uncertain).", files=files)
+                    await target.send(content=f"{{msg.author.mention}} kontenmu dipindah (uncertain).", files=files)
                 except Exception:
                     pass
                 return

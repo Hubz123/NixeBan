@@ -5,8 +5,12 @@ import discord
 from discord.ext import commands
 from nixe.helpers.gemini_bridge import classify_lucky_pull
 
+log = logging.getLogger(__name__)
+CFG_PATH = pathlib.Path(__file__).resolve().parents[1] / "config" / "gacha_guard.json"
+
 # -*- coding: utf-8 -*-
-# Patch v15: robust image detection (handles missing content_type by filename extension)
+# Patch v16: robust image detection (handles missing content_type) + boot env refresh
+import asyncio, time
 IMAGE_EXTS = ('.png','.jpg','.jpeg','.webp','.gif','.bmp','.heic','.heif','.tiff','.tif')
 def _is_image(att):
     ct = (getattr(att, 'content_type', None) or '').lower()
@@ -15,8 +19,6 @@ def _is_image(att):
     name = (getattr(att, 'filename', '') or '').lower()
     return name.endswith(IMAGE_EXTS)
 
-log = logging.getLogger(__name__)
-CFG_PATH = pathlib.Path(__file__).resolve().parents[1] / "config" / "gacha_guard.json"
 
 def _load_cfg() -> dict:
     try:
@@ -42,16 +44,16 @@ class LuckyPullAuto(commands.Cog):
         cfg = _load_cfg().get("lucky_guard", {})
         g = cfg.get("gemini", {}) or {}
         self.enable = bool(g.get("enable", False))
-
-        key = _cfg_str("GEMINI_API_KEY")
-        self.api_key = key
+        self.api_key = _cfg_str("GEMINI_API_KEY")
         self.model = _cfg_str("GEMINI_MODEL", str(g.get("model", "gemini-2.5-flash"))) or "gemini-2.5-flash"
         try:
             self.timeout_ms = int(g.get("timeout_ms", 1200))
         except Exception:
             self.timeout_ms = 1200
 
-        self.debug = _cfg_str("LUCKYPULL_DEBUG") in ("1", "true", "yes", "on")
+        if _cfg_str("LUCKYPULL_DEBUG") in ("1","true","yes","on"):
+            log.warning("[lpa] gemini enable=%s model=%s timeout_ms=%s key=%s",
+                        self.enable, self.model, self.timeout_ms, "set" if bool(self.api_key) else "missing")
 
     @commands.Cog.listener("on_message")
     async def _on_message(self, msg: discord.Message):
@@ -73,17 +75,16 @@ class LuckyPullAuto(commands.Cog):
             try:
                 result = await classify_lucky_pull([data], api_key=self.api_key, model=self.model, timeout_ms=self.timeout_ms)
                 cache[msg.id] = {"label": result.get("label","other"), "conf": float(result.get("confidence",0.0))}
-                if self.debug:
+                if _cfg_str("LUCKYPULL_DEBUG") in ("1","true","yes","on"):
                     log.warning("[lpa:debug] hint msg=%s label=%s conf=%.3f model=%s", msg.id, result.get("label"), float(result.get("confidence",0.0)), self.model)
             except Exception as e:
-                if self.debug:
+                if _cfg_str("LUCKYPULL_DEBUG") in ("1","true","yes","on"):
                     log.warning("[lpa:debug] gemini error: %s", e)
                 pass
         asyncio.create_task(worker())
 
 async def setup(bot: commands.Bot):
-    if bot.get_cog("LuckyPullAuto"):
-        return
+    if bot.get_cog("LuckyPullAuto"): return
     try:
         await bot.add_cog(LuckyPullAuto(bot))
     except Exception:
