@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import os, json, pathlib, logging, asyncio, time
+import logging
 from typing import Set
 
 import discord
@@ -10,11 +10,10 @@ from nixe.helpers.persona import yandere
 from nixe.helpers.lucky_classifier import classify_image_meta
 
 log = logging.getLogger(__name__)
-CFG_PATH = pathlib.Path(__file__).resolve().parents[1] / "config" / "gacha_guard.json"
 
 # -*- coding: utf-8 -*-
-# Patch v16: robust image detection (handles missing content_type) + boot env refresh
-import asyncio, time
+# Patch v17: robust image detect + dynamic refresh + post-ready log + force read runtime_env.json
+import asyncio, time, os, json, pathlib
 IMAGE_EXTS = ('.png','.jpg','.jpeg','.webp','.gif','.bmp','.heic','.heif','.tiff','.tif')
 def _is_image(att):
     ct = (getattr(att, 'content_type', None) or '').lower()
@@ -23,34 +22,79 @@ def _is_image(att):
     name = (getattr(att, 'filename', '') or '').lower()
     return name.endswith(IMAGE_EXTS)
 
+# runtime_env.json loader (cached)
+_ENV_JSON_CACHE = None
+_ENV_JSON_MTIME = None
+def _envjson_path():
+    # allow override; else locate next to this cog under nixe/config/runtime_env.json
+    cand = os.getenv("NIXE_RUNTIME_ENV_PATH")
+    if cand and os.path.exists(cand):
+        return pathlib.Path(cand)
+    return pathlib.Path(__file__).resolve().parents[1] / "config" / "runtime_env.json"
 
-def _load_cfg() -> dict:
+def _load_envjson(force=False):
+    global _ENV_JSON_CACHE, _ENV_JSON_MTIME
+    p = _envjson_path()
     try:
-        with CFG_PATH.open("r", encoding="utf-8") as f:
-            return json.load(f)
+        mtime = p.stat().st_mtime
     except Exception:
-        return {"lucky_guard": {}}
+        mtime = None
+    if force or (_ENV_JSON_CACHE is None) or (_ENV_JSON_MTIME != mtime):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+        _ENV_JSON_CACHE = data
+        _ENV_JSON_MTIME = mtime
+    return _ENV_JSON_CACHE or {}
 
-def _cfg_str(name: str, default: str | None = None) -> str | None:
-    # Prefer runtime_env.json helper if available, else OS env
+def _cfg_pull_raw(name: str):
+    # try helper first
+    origin = "helper"
+    v = None
     try:
         from nixe.config.runtime_env import cfg_str
         v = cfg_str(name, None)
-        if v not in (None, "", "null", "None"):
-            return str(v)
     except Exception:
         pass
-    v = os.getenv(name, default if default is not None else "")
-    return v if v not in (None, "", "null", "None") else None
+    if v in (None, "", "null", "None"):
+        # try OS env
+        origin = "osenv"
+        v = os.getenv(name, None)
+    if v in (None, "", "null", "None"):
+        # fallback to JSON file
+        origin = "json"
+        envj = _load_envjson()
+        v = envj.get(name)
+    return v, origin
 
-def _cfg_float(name: str, default: float) -> float:
-    v = _cfg_str(name, None)
-    if v is None:
+def _cfg_str(name: str, default: str | None = None):
+    v, _ = _cfg_pull_raw(name)
+    if v in (None, "", "null", "None"):
+        return default
+    return str(v)
+
+def _cfg_float(name: str, default: float):
+    v, _ = _cfg_pull_raw(name)
+    if v in (None, "", "null", "None"):
         return default
     try:
         return float(v)
     except Exception:
         return default
+
+def _cfg_bool(name: str, default: bool=False):
+    v, _ = _cfg_pull_raw(name)
+    if v is None: return default
+    s = str(v).strip().lower()
+    if s in ("1","true","yes","on"): return True
+    if s in ("0","false","no","off"): return False
+    return default
+
+def _cfg_origin(name: str):
+    _, origin = _cfg_pull_raw(name)
+    return origin
+
 
 def _parse_id_list(s: str | None) -> Set[int]:
     out: Set[int] = set()
@@ -69,78 +113,81 @@ def _parse_id_list(s: str | None) -> Set[int]:
     return out
 
 class LuckyPullGuard(commands.Cog):
-    """Yandere persona; strict delete on guard channels if enabled.
-    - Robust image detection (content_type fallback to filename ext)
-    - Dynamic runtime_env refresh (boot + periodic + pre-decision)
-    - Boot env log after refresh for clear visibility
+    """Yandere guard with:
+    - robust image detect (content_type/filename)
+    - dynamic env refresh
+    - post-ready env log showing origins (helper/osenv/json)
+    - strict delete on guard channels if enabled
     """
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        cfg = _load_cfg().get("lucky_guard", {})
+
+        # JSON defaults (from gacha_guard.json)
+        try:
+            import json, pathlib
+            CFG_PATH = pathlib.Path(__file__).resolve().parents[1] / "config" / "gacha_guard.json"
+            with CFG_PATH.open("r", encoding="utf-8") as f:
+                _cfg = json.load(f)
+        except Exception:
+            _cfg = {}
+        cfg = _cfg.get("lucky_guard", {})
         self.enable = bool(cfg.get("enable", True))
-
         base_json = {int(x) for x in cfg.get("guard_channels", []) if str(x).isdigit()}
-        env_main = _parse_id_list(_cfg_str("LUCKYPULL_GUARD_CHANNELS"))
-        env_extra = _parse_id_list(_cfg_str("LUCKYPULL_GUARD_CHANNELS_EXTRA"))
-        self.guard_channels: Set[int] = base_json | env_main | env_extra
-
         self.redirect_channel = int(cfg.get("redirect_channel", 0)) or None
-
-        # JSON defaults; env may override at runtime
         self._json_delete = float(cfg.get("min_confidence_delete", 0.85))
         self._json_redirect = float(cfg.get("min_confidence_redirect", 0.60))
         g = cfg.get("gemini", {}) or {}
         self._json_wait = int(g.get("timeout_ms", 1200)) if bool(g.get("enable", False)) else 0
 
-        # Runtime values (refreshed)
+        # Runtime (will refresh)
+        self.guard_channels: Set[int] = base_json | _parse_id_list(_cfg_str("LUCKYPULL_GUARD_CHANNELS")) | _parse_id_list(_cfg_str("LUCKYPULL_GUARD_CHANNELS_EXTRA"))
         self.min_conf_delete = self._json_delete
         self.min_conf_redirect = self._json_redirect
         self.wait_ms = self._json_wait
         self.strict_delete_on_guard = False
         self.gemini_lucky_thr = 0.65
         self.debug = False
+        self._last_tick = 0.0
 
-        # Immediate refresh at boot
-        self._last_refresh = 0.0
-        self._refresh_env(force=True)
-
-        # Print boot line (may still show defaults if env not ready yet)
+        # Boot log (pre-refresh)
         log.warning("[lpg] guard_channels=%s redirect=%s wait_ms=%s delete>=%.2f redirect>=%.2f strict_on_guard=%s gem_thr=%.2f",
                     sorted(self.guard_channels), self.redirect_channel, self.wait_ms,
                     self.min_conf_delete, self.min_conf_redirect,
                     self.strict_delete_on_guard, self.gemini_lucky_thr)
 
-        # Schedule a post-ready refresh + log to show final values after env_admin loaded
-        bot.loop.create_task(self._post_ready_log())
+        # Post-ready refresh & log with ORIGINS
+        bot.loop.create_task(self._post_ready())
 
-    async def _post_ready_log(self):
+    async def _post_ready(self):
         try:
             await self.bot.wait_until_ready()
             await asyncio.sleep(1.0)
             self._refresh_env(force=True)
             log.warning("[lpg:env] (post-ready) wait_ms=%s delete>=%.2f redirect>=%.2f strict_on_guard=%s gem_thr=%.2f",
-                        self.wait_ms, self.min_conf_delete, self.min_conf_redirect,
-                        self.strict_delete_on_guard, self.gemini_lucky_thr)
+                        self.wait_ms, self.min_conf_delete, self.min_conf_redirect, self.strict_delete_on_guard, self.gemini_lucky_thr)
+            # Origins
+            log.warning("[lpg:envsrc] del_thr=%s redir_thr=%s wait=%s strict=%s gem_thr=%s",
+                        _cfg_origin("LUCKYPULL_DELETE_THRESHOLD"),
+                        _cfg_origin("LUCKYPULL_REDIRECT_THRESHOLD"),
+                        _cfg_origin("LUCKYPULL_MAX_LATENCY_MS"),
+                        _cfg_origin("LUCKYPULL_DELETE_ON_GUARD"),
+                        _cfg_origin("GEMINI_LUCKY_THRESHOLD"))
         except Exception:
             pass
 
-    def _refresh_env(self, force: bool = False):
-        now = time.monotonic()
-        if not force and now - self._last_refresh < 5.0:
+    def _refresh_env(self, force: bool=False):
+        import time as _t
+        if not force and (_t.monotonic() - self._last_tick) < 5.0:
             return
-        self._last_refresh = now
-        # Thresholds
+        self._last_tick = _t.monotonic()
         self.min_conf_delete = _cfg_float("LUCKYPULL_DELETE_THRESHOLD", self._json_delete)
         self.min_conf_redirect = _cfg_float("LUCKYPULL_REDIRECT_THRESHOLD", self._json_redirect)
-        # Wait (clamped)
         self.wait_ms = int(_cfg_float("LUCKYPULL_MAX_LATENCY_MS", float(self._json_wait)))
         if self.wait_ms > 2000: self.wait_ms = 2000
         if self.wait_ms < 0: self.wait_ms = 0
-        # Strict + Gemini lucky threshold
-        self.strict_delete_on_guard = (_cfg_str("LUCKYPULL_DELETE_ON_GUARD") in ("1","true","yes","on"))
+        self.strict_delete_on_guard = _cfg_bool("LUCKYPULL_DELETE_ON_GUARD", False)
         self.gemini_lucky_thr = _cfg_float("GEMINI_LUCKY_THRESHOLD", 0.65)
-        # Debug
-        self.debug = _cfg_str("LUCKYPULL_DEBUG") in ("1","true","yes","on")
+        self.debug = _cfg_bool("LUCKYPULL_DEBUG", False)
 
     @commands.Cog.listener("on_message")
     async def _on_message(self, msg: discord.Message):
@@ -150,24 +197,21 @@ class LuckyPullGuard(commands.Cog):
             if self.guard_channels and msg.channel.id not in self.guard_channels:
                 return
 
-            # Ensure env is fresh for decisions
             self._refresh_env()
-
             images = [a for a in msg.attachments if _is_image(a)]
             if not images:
                 return
 
-            # Pull Gemini auto-hint from cache (populated by lucky_pull_auto)
+            # pull gemini hint
             cache = getattr(self.bot, "_lp_auto", None)
-            gem_label = None
-            gem_conf = None
+            gem_label = None; gem_conf = None
             if cache and msg.id in cache:
                 hint = cache.pop(msg.id)
-                gem_label = hint.get("label")
-                gem_conf = float(hint.get("conf", 0.0))
+                gem_label = hint.get("label"); 
+                try: gem_conf = float(hint.get("conf", 0.0))
+                except: gem_conf = 0.0
 
-            best_conf = 0.0
-            per_file = []
+            best_conf = 0.0; per_file = []
             for a in images:
                 meta = classify_image_meta(filename=a.filename, gemini_label=gem_label, gemini_conf=gem_conf)
                 c = float(meta.get("confidence", 0.0))
