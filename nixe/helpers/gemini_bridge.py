@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import os, logging, asyncio, json as _json
-from typing import Dict, Optional, List
+import logging, asyncio, os, json as _json
+from typing import Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
@@ -26,12 +26,12 @@ async def _gemini_call(imgs: List[bytes], *, api_key: str, model: str, timeout_m
     try:
         import google.generativeai as genai  # type: ignore
     except Exception as e:
-        return {"label": "other", "confidence": 0.0, "reason": f"no_sdk:{e}"}
+        return {"label":"other","confidence":0.0,"reason":f"no_sdk:{e}"}
     try:
         genai.configure(api_key=api_key)
         model_obj = genai.GenerativeModel(model_name=model, system_instruction=_JSON_SYS)
         prompt = _JSON_USER_TEMPLATE.format(hints=hints or "(none)")
-        parts = [prompt] + [ { "mime_type": "image/png", "data": b } for b in imgs ]
+        parts = [prompt] + [{"mime_type":"image/png","data":b} for b in imgs]
         resp = await asyncio.wait_for(model_obj.generate_content_async(parts), timeout=timeout_ms/1000.0)
         txt = (getattr(resp, "text", None) or "").strip()
         if not txt:
@@ -40,30 +40,20 @@ async def _gemini_call(imgs: List[bytes], *, api_key: str, model: str, timeout_m
             data = _json.loads(txt)
             label = str(data.get("label","other")).strip()
             conf = float(data.get("confidence",0.0))
+            return {"label":label, "confidence":max(0.0,min(1.0,conf)), "reason":"gemini"}
         except Exception:
             low = txt.lower()
-            if ("lucky" in low or "pull" in low or "wish" in low or "gacha" in low or "10x" in low or "draw" in low):
-                label, conf = "lucky_pull", 0.75
-            else:
-                label, conf = "other", 0.0
-        return {"label": label, "confidence": max(0.0, min(1.0, conf)), "reason": "gemini"}
+            if any(k in low for k in ("lucky","pull","wish","gacha","10x","draw","pity","ssr","ur","banner")):
+                return {"label":"lucky_pull","confidence":0.75,"reason":"parse_heur"}
+            return {"label":"other","confidence":0.0,"reason":"parse_fail"}
     except asyncio.TimeoutError:
-        return {"label": "other", "confidence": 0.0, "reason": "timeout"}
+        return {"label":"other","confidence":0.0,"reason":"timeout"}
     except Exception as e:
-        return {"label": "other", "confidence": 0.0, "reason": f"error:{e}"}
+        return {"label":"other","confidence":0.0,"reason":f"error:{e}"}
 
 async def classify_lucky_pull(image_bytes_list: List[bytes], *, api_key: Optional[str]=None, model: str="gemini-2.5-flash", timeout_ms: int=1200, hints: str="") -> Dict:
+    # Enforce latest only: NO FALLBACK to older models.
     if not api_key or not image_bytes_list:
-        return {"label": "other", "confidence": 0.0, "reason": "no_api_or_empty"}
-    # Limit to a few images for latency
+        return {"label":"other","confidence":0.0,"reason":"no_api_or_empty"}
     imgs = image_bytes_list[:3]
-    # Pass 1: requested model
-    r1 = await _gemini_call(imgs, api_key=api_key, model=model, timeout_ms=timeout_ms, hints=hints)
-    if r1.get("label") == "lucky_pull" and r1.get("confidence", 0.0) >= 0.50:
-        return r1
-    # Pass 2: fallback to 1.5 if needed
-    if model != "gemini-1.5-flash":
-        r2 = await _gemini_call(imgs, api_key=api_key, model="gemini-1.5-flash", timeout_ms=timeout_ms, hints=hints)
-        # pick the stronger
-        return r2 if r2.get("confidence",0.0) > r1.get("confidence",0.0) else r1
-    return r1
+    return await _gemini_call(imgs, api_key=api_key, model=model, timeout_ms=timeout_ms, hints=hints)

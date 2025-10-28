@@ -1,19 +1,34 @@
-
-import asyncio
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+import logging, sys
 from discord.ext import commands
 
+log = logging.getLogger(__name__)
+
+def _safe_print(msg: str):
+    try:
+        print(msg)
+    except Exception:
+        try:
+            if hasattr(sys.stdout, 'reconfigure'):
+                sys.stdout.reconfigure(encoding='utf-8')
+            print(msg)
+        except Exception:
+            try:
+                print(msg.encode('ascii','replace').decode('ascii'))
+            except Exception:
+                pass
+
 class LiveBanner(commands.Cog):
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-        self._done = False
+    def __init__(self, bot): self.bot = bot
 
     @commands.Cog.listener()
     async def on_ready(self):
-        if self._done:
-            return
-        self._done = True
-        await asyncio.sleep(0.5)
-        print("==> Your service is live 🎉")  # bare print so it matches exactly (no logger prefix)
+        _safe_print('==> Your service is live 🎉')  # no logger prefix to match Render banner
 
-async def setup(bot: commands.Bot):
-    await bot.add_cog(LiveBanner(bot))
+async def setup(bot):
+    if bot.get_cog('LiveBanner'): return
+    try:
+        await bot.add_cog(LiveBanner(bot))
+    except Exception:
+        pass

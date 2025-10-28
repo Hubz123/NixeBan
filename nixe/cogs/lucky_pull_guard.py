@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import logging
-from typing import Set
+from typing import Set, List, Tuple
 
 import discord
 from discord.ext import commands
@@ -12,9 +12,10 @@ from nixe.helpers.lucky_classifier import classify_image_meta
 log = logging.getLogger(__name__)
 
 # -*- coding: utf-8 -*-
-# Patch v17: robust image detect + dynamic refresh + post-ready log + force read runtime_env.json
-import asyncio, time, os, json, pathlib
+# v19 common helpers
+import asyncio, os, json, pathlib, time
 IMAGE_EXTS = ('.png','.jpg','.jpeg','.webp','.gif','.bmp','.heic','.heif','.tiff','.tif')
+
 def _is_image(att):
     ct = (getattr(att, 'content_type', None) or '').lower()
     if ct.startswith('image/'):
@@ -22,11 +23,10 @@ def _is_image(att):
     name = (getattr(att, 'filename', '') or '').lower()
     return name.endswith(IMAGE_EXTS)
 
-# runtime_env.json loader (cached)
+# runtime_env.json loader (cached) + origin probe
 _ENV_JSON_CACHE = None
 _ENV_JSON_MTIME = None
 def _envjson_path():
-    # allow override; else locate next to this cog under nixe/config/runtime_env.json
     cand = os.getenv("NIXE_RUNTIME_ENV_PATH")
     if cand and os.path.exists(cand):
         return pathlib.Path(cand)
@@ -49,39 +49,31 @@ def _load_envjson(force=False):
     return _ENV_JSON_CACHE or {}
 
 def _cfg_pull_raw(name: str):
-    # try helper first
     origin = "helper"
     v = None
     try:
-        from nixe.config.runtime_env import cfg_str
-        v = cfg_str(name, None)
+        from nixe.config.runtime_env import cfg_str as _c
+        v = _c(name, None)
     except Exception:
         pass
     if v in (None, "", "null", "None"):
-        # try OS env
         origin = "osenv"
         v = os.getenv(name, None)
     if v in (None, "", "null", "None"):
-        # fallback to JSON file
         origin = "json"
-        envj = _load_envjson()
-        v = envj.get(name)
+        v = _load_envjson().get(name)
     return v, origin
 
 def _cfg_str(name: str, default: str | None = None):
     v, _ = _cfg_pull_raw(name)
-    if v in (None, "", "null", "None"):
-        return default
+    if v in (None, "", "null", "None"): return default
     return str(v)
 
 def _cfg_float(name: str, default: float):
     v, _ = _cfg_pull_raw(name)
-    if v in (None, "", "null", "None"):
-        return default
-    try:
-        return float(v)
-    except Exception:
-        return default
+    if v in (None, "", "null", "None"): return default
+    try: return float(v)
+    except Exception: return default
 
 def _cfg_bool(name: str, default: bool=False):
     v, _ = _cfg_pull_raw(name)
@@ -92,107 +84,106 @@ def _cfg_bool(name: str, default: bool=False):
     return default
 
 def _cfg_origin(name: str):
-    _, origin = _cfg_pull_raw(name)
-    return origin
+    _, o = _cfg_pull_raw(name); return o
 
 
 def _parse_id_list(s: str | None) -> Set[int]:
     out: Set[int] = set()
-    if not s:
-        return out
+    if not s: return out
     for tok in str(s).replace(";", ",").split(","):
         tok = tok.strip()
-        if not tok:
-            continue
-        tok = tok.strip("<#> ").replace("_", "")
+        if not tok: continue
+        tok = tok.strip("<#> ").replace("_","")
         if tok.isdigit():
-            try:
-                out.add(int(tok))
-            except Exception:
-                pass
+            out.add(int(tok))
     return out
 
 class LuckyPullGuard(commands.Cog):
-    """Yandere guard with:
-    - robust image detect (content_type/filename)
-    - dynamic env refresh
-    - post-ready env log showing origins (helper/osenv/json)
-    - strict delete on guard channels if enabled
-    """
+    """Lucky pull guard w/ Gemini hint wait + robust env & image detect."""
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-
-        # JSON defaults (from gacha_guard.json)
+        # JSON base
         try:
             import json, pathlib
             CFG_PATH = pathlib.Path(__file__).resolve().parents[1] / "config" / "gacha_guard.json"
-            with CFG_PATH.open("r", encoding="utf-8") as f:
-                _cfg = json.load(f)
+            _cfg = json.loads(CFG_PATH.read_text(encoding="utf-8"))
         except Exception:
             _cfg = {}
-        cfg = _cfg.get("lucky_guard", {})
-        self.enable = bool(cfg.get("enable", True))
-        base_json = {int(x) for x in cfg.get("guard_channels", []) if str(x).isdigit()}
-        self.redirect_channel = int(cfg.get("redirect_channel", 0)) or None
-        self._json_delete = float(cfg.get("min_confidence_delete", 0.85))
-        self._json_redirect = float(cfg.get("min_confidence_redirect", 0.60))
-        g = cfg.get("gemini", {}) or {}
-        self._json_wait = int(g.get("timeout_ms", 1200)) if bool(g.get("enable", False)) else 0
+        lg = (_cfg.get("lucky_guard") or {})
+        base_channels = {int(x) for x in (lg.get("guard_channels") or []) if str(x).isdigit()}
+        self.redirect_channel = int(lg.get("redirect_channel") or 0) or None
+        self._json_delete = float(lg.get("min_confidence_delete") or 0.85)
+        self._json_redirect = float(lg.get("min_confidence_redirect") or 0.60)
+        g = (lg.get("gemini") or {})
+        self._json_wait = int(g.get("timeout_ms") or 1200) if bool(g.get("enable")) else 0
 
-        # Runtime (will refresh)
-        self.guard_channels: Set[int] = base_json | _parse_id_list(_cfg_str("LUCKYPULL_GUARD_CHANNELS")) | _parse_id_list(_cfg_str("LUCKYPULL_GUARD_CHANNELS_EXTRA"))
+        # Runtime (override-able)
+        self.guard_channels: Set[int] = base_channels | _parse_id_list(_cfg_str("LUCKYPULL_GUARD_CHANNELS")) | _parse_id_list(_cfg_str("LUCKYPULL_GUARD_CHANNELS_EXTRA"))
         self.min_conf_delete = self._json_delete
         self.min_conf_redirect = self._json_redirect
         self.wait_ms = self._json_wait
         self.strict_delete_on_guard = False
         self.gemini_lucky_thr = 0.65
         self.debug = False
-        self._last_tick = 0.0
+        self._last_refresh = 0.0
 
-        # Boot log (pre-refresh)
         log.warning("[lpg] guard_channels=%s redirect=%s wait_ms=%s delete>=%.2f redirect>=%.2f strict_on_guard=%s gem_thr=%.2f",
                     sorted(self.guard_channels), self.redirect_channel, self.wait_ms,
-                    self.min_conf_delete, self.min_conf_redirect,
-                    self.strict_delete_on_guard, self.gemini_lucky_thr)
-
-        # Post-ready refresh & log with ORIGINS
+                    self.min_conf_delete, self.min_conf_redirect, self.strict_delete_on_guard, self.gemini_lucky_thr)
         bot.loop.create_task(self._post_ready())
 
     async def _post_ready(self):
-        try:
-            await self.bot.wait_until_ready()
-            await asyncio.sleep(1.0)
-            self._refresh_env(force=True)
-            log.warning("[lpg:env] (post-ready) wait_ms=%s delete>=%.2f redirect>=%.2f strict_on_guard=%s gem_thr=%.2f",
-                        self.wait_ms, self.min_conf_delete, self.min_conf_redirect, self.strict_delete_on_guard, self.gemini_lucky_thr)
-            # Origins
-            log.warning("[lpg:envsrc] del_thr=%s redir_thr=%s wait=%s strict=%s gem_thr=%s",
-                        _cfg_origin("LUCKYPULL_DELETE_THRESHOLD"),
-                        _cfg_origin("LUCKYPULL_REDIRECT_THRESHOLD"),
-                        _cfg_origin("LUCKYPULL_MAX_LATENCY_MS"),
-                        _cfg_origin("LUCKYPULL_DELETE_ON_GUARD"),
-                        _cfg_origin("GEMINI_LUCKY_THRESHOLD"))
-        except Exception:
-            pass
+        await self.bot.wait_until_ready()
+        await asyncio.sleep(1.0)
+        self._refresh_env(force=True)
+        log.warning("[lpg:env] (post-ready) wait_ms=%s delete>=%.2f redirect>=%.2f strict_on_guard=%s gem_thr=%.2f",
+                    self.wait_ms, self.min_conf_delete, self.min_conf_redirect, self.strict_delete_on_guard, self.gemini_lucky_thr)
+        log.warning("[lpg:envsrc] del_thr=%s redir_thr=%s wait=%s strict=%s gem_thr=%s",
+                    _cfg_origin("LUCKYPULL_DELETE_THRESHOLD"),
+                    _cfg_origin("LUCKYPULL_REDIRECT_THRESHOLD"),
+                    _cfg_origin("LUCKYPULL_MAX_LATENCY_MS"),
+                    _cfg_origin("LUCKYPULL_DELETE_ON_GUARD"),
+                    _cfg_origin("GEMINI_LUCKY_THRESHOLD"))
 
     def _refresh_env(self, force: bool=False):
-        import time as _t
-        if not force and (_t.monotonic() - self._last_tick) < 5.0:
+        if not force and (time.monotonic() - self._last_refresh) < 5.0:
             return
-        self._last_tick = _t.monotonic()
+        self._last_refresh = time.monotonic()
         self.min_conf_delete = _cfg_float("LUCKYPULL_DELETE_THRESHOLD", self._json_delete)
         self.min_conf_redirect = _cfg_float("LUCKYPULL_REDIRECT_THRESHOLD", self._json_redirect)
         self.wait_ms = int(_cfg_float("LUCKYPULL_MAX_LATENCY_MS", float(self._json_wait)))
-        if self.wait_ms > 2000: self.wait_ms = 2000
         if self.wait_ms < 0: self.wait_ms = 0
+        if self.wait_ms > 2000: self.wait_ms = 2000
         self.strict_delete_on_guard = _cfg_bool("LUCKYPULL_DELETE_ON_GUARD", False)
         self.gemini_lucky_thr = _cfg_float("GEMINI_LUCKY_THRESHOLD", 0.65)
         self.debug = _cfg_bool("LUCKYPULL_DEBUG", False)
 
+    async def _wait_gem_hint(self, msg_id: int) -> Tuple[str|None, float|None]:
+        # poll cache for up to wait_ms in 50ms steps
+        deadline = time.monotonic() + (self.wait_ms/1000.0 if self.wait_ms else 0.0)
+        while time.monotonic() < deadline:
+            cache = getattr(self.bot, "_lp_auto", None)
+            if cache and msg_id in cache:
+                hint = cache.pop(msg_id)
+                lab = hint.get("label")
+                try: conf = float(hint.get("conf", 0.0))
+                except: conf = 0.0
+                return lab, conf
+            await asyncio.sleep(0.05)
+        # final check once
+        cache = getattr(self.bot, "_lp_auto", None)
+        if cache and msg_id in cache:
+            hint = cache.pop(msg_id)
+            lab = hint.get("label")
+            try: conf = float(hint.get("conf", 0.0))
+            except: conf = 0.0
+            return lab, conf
+        return None, None
+
     @commands.Cog.listener("on_message")
     async def _on_message(self, msg: discord.Message):
         try:
-            if not self.enable or msg.author.bot or not msg.attachments:
+            if msg.author.bot or not msg.attachments:
                 return
             if self.guard_channels and msg.channel.id not in self.guard_channels:
                 return
@@ -202,21 +193,23 @@ class LuckyPullGuard(commands.Cog):
             if not images:
                 return
 
-            # pull gemini hint
-            cache = getattr(self.bot, "_lp_auto", None)
+            # Try immediate Gemini hint, or wait up to wait_ms
             gem_label = None; gem_conf = None
+            cache = getattr(self.bot, "_lp_auto", None)
             if cache and msg.id in cache:
                 hint = cache.pop(msg.id)
-                gem_label = hint.get("label"); 
+                gem_label = hint.get("label")
                 try: gem_conf = float(hint.get("conf", 0.0))
                 except: gem_conf = 0.0
+            elif self.wait_ms:
+                gem_label, gem_conf = await self._wait_gem_hint(msg.id)
 
             best_conf = 0.0; per_file = []
             for a in images:
                 meta = classify_image_meta(filename=a.filename, gemini_label=gem_label, gemini_conf=gem_conf)
                 c = float(meta.get("confidence", 0.0))
                 per_file.append((a.filename, c))
-                best_conf = max(best_conf, c)
+                if c > best_conf: best_conf = c
 
             # Decision
             action = "none"
@@ -239,15 +232,23 @@ class LuckyPullGuard(commands.Cog):
             if action == "delete":
                 reason = "deteksi lucky pull"
                 user_mention = msg.author.mention
-                channel_name = f"#{{getattr(msg.channel, 'name', '?')}}"
+                channel_name = f"#{getattr(msg.channel, 'name', '?')}"
                 line = yandere(user=user_mention, channel=channel_name, reason=reason)
-                await msg.delete()
-                await msg.channel.send(line, delete_after=10)
+                try:
+                    await msg.delete()
+                except discord.Forbidden:
+                    return
+                except Exception:
+                    pass
+                try:
+                    await msg.channel.send(line, delete_after=10)
+                except Exception:
+                    pass
                 if self.redirect_channel:
                     try:
                         target = msg.guild.get_channel(self.redirect_channel) or await self.bot.fetch_channel(self.redirect_channel)
                         files = [await a.to_file() for a in images]
-                        await target.send(content=f"{{user_mention}} dipindah ke sini karena {{reason}}.", files=files)
+                        await target.send(content=f"{user_mention} dipindah ke sini karena {reason}.", files=files)
                     except Exception:
                         pass
                 return
@@ -256,16 +257,12 @@ class LuckyPullGuard(commands.Cog):
                 try:
                     target = msg.guild.get_channel(self.redirect_channel) or await self.bot.fetch_channel(self.redirect_channel)
                     files = [await a.to_file() for a in images]
-                    await target.send(content=f"{{msg.author.mention}} kontenmu dipindah (uncertain).", files=files)
+                    await target.send(content=f"{msg.author.mention} kontenmu dipindah (uncertain).", files=files)
                 except Exception:
                     pass
-                return
-        except discord.Forbidden:
-            return
         except Exception as e:
             if self.debug:
                 log.warning("[lpg:debug] exception: %s", e)
-            return
 
 async def setup(bot: commands.Bot):
     if bot.get_cog("LuckyPullGuard"): return
