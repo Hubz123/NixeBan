@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging, asyncio
 import discord
 from discord.ext import commands
-from nixe.helpers.gemini_bridge import classify_lucky_pull
+classify_lucky_pull = None  # lazy import
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +91,16 @@ class LuckyPullAuto(commands.Cog):
         asyncio.create_task(worker())
 
 async def setup(bot: commands.Bot):
+    # lazy import once when cog is added
+    global classify_lucky_pull
+    if classify_lucky_pull is None:
+        try:
+            from nixe.helpers.gemini_bridge import classify_lucky_pull as _clf
+            classify_lucky_pull = _clf
+        except Exception as e:
+            logging.getLogger(__name__).warning('[lpa] gemini unavailable: %s', e)
+            # still add cog; it will just skip gemini path
+
     if bot.get_cog('LuckyPullAuto'): return
     try:
         await bot.add_cog(LuckyPullAuto(bot))

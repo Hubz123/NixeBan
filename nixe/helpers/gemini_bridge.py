@@ -1,25 +1,29 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import logging, asyncio, os, json as _json
+from nixe.helpers.env_reader import get as _cfg_get
 from typing import Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
 _JSON_SYS = (
-    "You are an image classifier that decides if an image shows a GACHA/LUCKY PULL result "
-    "(e.g., wish/pull results, 10x draw, star ratings, reward reveal, SSR/UR, pity, rate-up banner) "
-    "from any game (HSR, Genshin, WuWa, etc.). "
-    "Return STRICT JSON ONLY with keys: label (\"lucky_pull\" or \"other\") and confidence (0..1). "
-    "Do NOT include any extra text."
+    "You are an image classifier for GACHA/LUCKY-PULL result screens across many games. "
+    "Typical cues: multiple vertical cards/panels, rarity frames/colors (SSR/SR/R/UR/N), "
+    "star icons (3★..6★), rainbow/aurora glows, NEW/NEW!! tags, pity shards (×60/×150/×200/×440/×1000), "
+    "and action buttons like 'Confirm', 'Recruit Again', 'Continue Herald', or headers like 'RESCUE RESULTS'. "
+    "Return STRICT JSON ONLY: {'label': 'lucky_pull'|'other', 'confidence': 0..1}."
 )
 
 _JSON_USER_TEMPLATE = (
-    "Task: Classify the given image(s) as 'lucky_pull' or 'other'.\n"
-    "Guidance: Look for results screen, multi-draw (10x), reveal cards, rarity stars, banner name/portrait, "
-    "terms like wish/pull/gacha/pity/SSR/UR, or typical reward layouts. "
-    "If strongly consistent with such UI, output confidence >= 0.80.\n"
-    "Context hints (may be empty): {hints}\n"
-    "Respond with JSON only."
+    "Task: Decide if this image is a gacha multi-pull RESULT screen.
+"
+    "Look for cues: vertical card strips; rarity text or frames (SSR/SR/R/UR/N, sometimes 'UP'); "
+    "star icons; duplicate units; shards like ×60/×150/×200/×440/×1000; "
+    "labels NEW/NEW!!; headers 'RESCUE RESULTS'; buttons 'Confirm'/'Recruit Again'/'Continue Herald'.
+"
+    "Hints: {hints}
+"
+    "Return strictly JSON like {\"label\":\"lucky_pull\",\"confidence\":0.92}."
 )
 
 async def _gemini_call(imgs: List[bytes], *, api_key: str, model: str, timeout_ms: int, hints: str="") -> Dict:
@@ -29,7 +33,7 @@ async def _gemini_call(imgs: List[bytes], *, api_key: str, model: str, timeout_m
         return {"label":"other","confidence":0.0,"reason":f"no_sdk:{e}"}
     try:
         genai.configure(api_key=api_key)
-        model_obj = genai.GenerativeModel(model_name=model, system_instruction=_JSON_SYS)
+        model_obj = genai.GenerativeModel(model_name=model, system_instruction=_JSON_SYS, generation_config={'response_mime_type':'application/json'})
         prompt = _JSON_USER_TEMPLATE.format(hints=hints or "(none)")
         parts = [prompt] + [{"mime_type":"image/png","data":b} for b in imgs]
         resp = await asyncio.wait_for(model_obj.generate_content_async(parts), timeout=timeout_ms/1000.0)

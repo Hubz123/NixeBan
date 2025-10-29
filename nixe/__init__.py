@@ -1,1 +1,1 @@
-# smoke-safe init
+# make nixe a package

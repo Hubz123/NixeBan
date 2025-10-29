@@ -1,13 +1,12 @@
 from __future__ import annotations
 import os, json
 from pathlib import Path
-
-# Try to autoload .env (local dev). Ignore if library missing.
+# Try load .env locally (optional)
 try:
     from dotenv import load_dotenv, find_dotenv  # type: ignore
-    _p = find_dotenv(usecwd=True)
-    if _p:
-        load_dotenv(_p)
+    p = find_dotenv(usecwd=True)
+    if p:
+        load_dotenv(p)
 except Exception:
     pass
 
@@ -21,7 +20,6 @@ _SENSITIVE_EXACT = {
     "HUGGINGFACEHUB_API_TOKEN", "HF_TOKEN",
     "ANTHROPIC_API_KEY", "COHERE_API_KEY",
 }
-
 _SENSITIVE_FRAGMENTS = (
     "API_KEY", "ACCESS_TOKEN", "REFRESH_TOKEN", "SESSION_TOKEN",
     "_TOKEN", "_SECRET", "_PASSWORD",
@@ -44,13 +42,12 @@ def _is_sensitive(name: str) -> bool:
 
 def get(key: str, default: str = "") -> str:
     """Bridge policy:
-    - Sensitive keys (tokens/API keys/etc) are ALWAYS taken from OS env (Render/.env).
-    - Non-sensitive settings prefer runtime_env.json, with fallback to OS env.
+    - Sensitive keys (tokens/API keys/secrets) are ALWAYS read from OS env (Render/.env).
+    - Non-sensitive settings prefer runtime_env.json, fallback to OS env.
     """
     if _is_sensitive(key):
         v = os.environ.get(key, None)
         return str(v).strip() if v is not None else str(default)
-    # Non-sensitive: prefer JSON overrides first
     data = _json()
     v = data.get(key, None)
     if v is None or str(v).strip() in ("", "<inherit>", "<placeholder>", "<gemini>"):
@@ -66,8 +63,6 @@ def get_int(key: str, default: int = 0) -> int:
     return int(s) if s else int(default)
 
 def source(key: str) -> str:
-    """Return 'env' or 'json' to help debug where a value came from."""
-    if _is_sensitive(key):
-        return "env"
+    if _is_sensitive(key): return "env"
     data = _json()
     return "json" if key in data and str(data.get(key, "")).strip() not in ("", "<inherit>", "<placeholder>", "<gemini>") else "env"

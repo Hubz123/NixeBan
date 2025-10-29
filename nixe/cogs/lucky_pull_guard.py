@@ -14,7 +14,7 @@ except Exception:
 
 from nixe.helpers.persona import yandere
 from nixe.helpers.lucky_classifier import classify_image_meta
-from nixe.helpers.gemini_bridge import classify_lucky_pull
+# lazy import classify_lucky_pull inside _inline_gemini
 
 log = logging.getLogger(__name__)
 
@@ -261,24 +261,14 @@ class LuckyPullGuard(commands.Cog):
                 user_mention = msg.author.mention
                 channel_name = f"#{getattr(msg.channel, 'name', '?')}"
                 line = yandere(user=user_mention, channel=channel_name, reason=reason)
-                # Tambah rujukan ke channel redirect agar user langsung tahu harus pindah ke mana.
-                try:
-                    redir_id = self.redirect_channel
-                except Exception:
-                    redir_id = None
-                if redir_id:
-                    line = f"{line} → silakan lanjut di <#{redir_id}>."
-
                 try:
                     await msg.delete()
                 except discord.Forbidden:
-                    import logging
-                    logging.getLogger(__name__).error("[lpg] Missing 'Manage Messages' permission in #%s; cannot delete.", getattr(msg.channel, 'name', '?'))
                     return
                 except Exception:
                     pass
                 try:
-                    await msg.channel.send(line, delete_after=15)
+                    await msg.channel.send(line, delete_after=10)
                 except Exception:
                     pass
                 if self.redirect_channel:
