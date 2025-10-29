@@ -1,49 +1,76 @@
 # -*- coding: utf-8 -*-
+"""pHash config resolver with aliases expected by phash_db_board.py.
+Exports:
+  - PHASH_DB_THREAD_ID (int)
+  - PHASH_DB_MESSAGE_ID (int)  # alias for pinned board message ID
+  - PHASH_DB_STRICT_EDIT (int 0/1)
+  - PHASH_IMAGEPHISH_THREAD_ID (int)
+  - NIXE_PHASH_SOURCE_THREAD_ID (int)
+  - LOG_CHANNEL_ID (int)
+"""
 from __future__ import annotations
-import os, json
-from pathlib import Path
-from typing import Dict, Any
 
-_THIS = Path(__file__).resolve()
-def _find_env_file() -> Path:
-    cand = [
-        _THIS.parent / "config" / "runtime_env.json",
-        _THIS.parents[1] / "config" / "runtime_env.json",
-        _THIS.parent.parent / "config" / "runtime_env.json",
-    ]
-    for p in cand:
-        if p.exists():
-            return p
-    return _THIS.parents[1] / "config" / "runtime_env.json"
-
-ENV = _find_env_file()
-
-def _json() -> Dict[str, Any]:
+def _safe_int(x, default=0):
     try:
-        return json.loads(ENV.read_text(encoding="utf-8"))
+        return int(str(x).strip())
     except Exception:
-        return {}
+        return int(default)
 
-def _get(key: str, default: str = "0") -> str:
-    v = os.environ.get(key, None)
-    if v is None:
-        v = _json().get(key, default)
-    return ("" if v is None else str(v)).strip()
+# Prefer env_reader if present
+try:
+    from nixe.helpers.env_reader import get as _cfg_get
+except Exception:
+    import os, json
+    from pathlib import Path
+    def _cfg_get(key: str, default: str = "") -> str:
+        # minimal fallback: runtime_env.json -> ENV
+        try:
+            ROOT = Path(__file__).resolve().parents[1]
+            j = json.loads((ROOT / "config" / "runtime_env.json").read_text(encoding="utf-8"))
+            if key in j and str(j[key]).strip():
+                return str(j[key]).strip()
+        except Exception:
+            pass
+        return str(os.environ.get(key, default)).strip()
 
-def _digits(v: str) -> str:
-    s = "".join(ch for ch in str(v) if ch.isdigit())
-    return s or "0"
+# --- Board pinned message id (provide canonical + aliases) ---
+PHASH_DB_BOARD_MSG_ID = _safe_int(_cfg_get("PHASH_DB_BOARD_MSG_ID",
+    _cfg_get("PHASH_DB_BOARD_MESSAGE_ID",
+        _cfg_get("PHASH_DB_MESSAGE_ID",
+            _cfg_get("PHASH_DB_PINNED_MSG_ID",
+                _cfg_get("MSG_PHASH_DB_BOARD_ID", "0")
+            )
+        )
+    )
+))
+# Alias expected by cogs: expose PHASH_DB_MESSAGE_ID
+PHASH_DB_MESSAGE_ID = PHASH_DB_BOARD_MSG_ID
 
-def _as01(v: str) -> int:
-    return 0 if str(v).strip().lower() in ("0","false","no","off") else 1
+# --- DB thread id (canonical + synonyms) ---
+PHASH_DB_THREAD_ID = _safe_int(_cfg_get("PHASH_DB_THREAD_ID",
+    _cfg_get("NIXE_PHASH_DB_THREAD_ID",
+        _cfg_get("PHASH_DB_BOARD_THREAD_ID",
+            _cfg_get("PHASH_DB_THREAD", "0")
+        )
+    )
+))
 
-NIXE_PHASH_SOURCE_THREAD_ID: int = int(_digits(_get("NIXE_PHASH_SOURCE_THREAD_ID", "0")))
-NIXE_PHASH_DB_THREAD_ID: int     = int(_digits(_get("NIXE_PHASH_DB_THREAD_ID", "0")))
-PHASH_DB_MESSAGE_ID: int         = int(_digits(_get("PHASH_DB_MESSAGE_ID", "0")))
+# --- Parent/log channel id ---
+LOG_CHANNEL_ID = _safe_int(_cfg_get("PHASH_DB_PARENT_CHANNEL_ID",
+    _cfg_get("LOG_CHANNEL_ID",
+        _cfg_get("NIXE_PHISH_LOG_CHAN_ID", "0")
+    )
+))
 
-PHASH_IMAGEPHISH_THREAD_ID: int  = int(_digits(_get("PHASH_IMAGEPHISH_THREAD_ID", str(NIXE_PHASH_SOURCE_THREAD_ID))))
+# --- Source/imagephish thread id ---
+PHASH_IMAGEPHISH_THREAD_ID = _safe_int(_cfg_get("PHASH_IMAGEPHISH_THREAD_ID", "0"))
+NIXE_PHASH_SOURCE_THREAD_ID = _safe_int(_cfg_get("NIXE_PHASH_SOURCE_THREAD_ID",
+    _cfg_get("PHASH_SOURCE_THREAD_ID", str(PHASH_IMAGEPHISH_THREAD_ID))
+))
 
-PHASH_DB_STRICT_EDIT: int        = _as01(_get("PHASH_DB_STRICT_EDIT", "1"))
-NIXE_PHASH_AUTOBACKFILL: int     = _as01(_get("NIXE_PHASH_AUTOBACKFILL", "0"))
+# --- Strict edit flag (default ON to avoid accidental posting) ---
+def _bool01(key: str, default: str = "1") -> int:
+    v = _cfg_get(key, default).strip().lower()
+    return 1 if v in ("1","true","yes","y","on") else 0
 
-PHASH_DB_THREAD_ID: int          = NIXE_PHASH_DB_THREAD_ID
+PHASH_DB_STRICT_EDIT = _bool01("PHASH_DB_STRICT_EDIT", "1")

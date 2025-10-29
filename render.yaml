@@ -4,7 +4,7 @@ services:
     name: nixe-phishbot
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt && python scripts/smoke_cogs.py && python scripts/smoke_all.py
+    buildCommand: pip install -r requirements.txt && python scripts/smoke_all.py
     startCommand: python main.py
     autoDeploy: false
     envVars:
