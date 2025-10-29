@@ -1,7 +1,11 @@
 
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import asyncio, logging, json as _json
+import asyncio
+try:
+    from nixe.helpers.image_cleaner import clean_for_gemini_bytes
+except Exception:
+    clean_for_gemini_bytes = None, logging, json as _json
 from typing import List, Tuple
 
 # Read API key / model via env_reader (runtime_env.json / secrets.json / ENV)
@@ -116,3 +120,6 @@ async def classify_lucky_pull(images: List[bytes], *, hints: str = "", timeout_m
     Return ("lucky_pull" | "other", confidence 0..1).
     """
     return await _gemini_call(images, hints=hints, timeout_ms=timeout_ms)
+
+# marker to avoid duplicate patch
+_CLEAN_APPLIED = True

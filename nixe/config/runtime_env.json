@@ -3,8 +3,8 @@
   "GEMINI_MODEL": "gemini-2.5-flash",
   "GEMINI_WARMUP_ENABLE": "1",
   "GEMINI_WARMUP_TIMEOUT_MS": "4000",
-  "GLOG_minloglevel": "2",
-  "GRPC_VERBOSITY": "ERROR",
+  "GLOG_minloglevel": "3",
+  "GRPC_VERBOSITY": "NONE",
   "LOG_CHANNEL_ID": "1431178130155896882",
   "LUCKYPULL_DELETE_ON_GUARD": "1",
   "LUCKYPULL_GEM_ENABLE": "1",
@@ -45,5 +45,6 @@
   "SUS_ATTACH_HEAD_TIMEOUT_MS": "2000",
   "SUS_ATTACH_WINDOW_S": "600",
   "YANDERE_TEMPLATES_PATH": "nixe/config/personas/yandere.json",
-  "YANDERE_TONE_MODE": "auto"
+  "YANDERE_TONE_MODE": "auto",
+  "LUCKYPULL_DEBUG_ONESHOT": "1"
 }
