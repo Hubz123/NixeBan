@@ -69,28 +69,46 @@ class PhashDbEditFixOverlay(commands.Cog):
                         msg = await ch.fetch_message(did)
                     except Exception:
                         msg = None
+            except Exception:
+                pass
         # wait up to 6s for runtime ids to be published by phash_db_board
+        r_tid, r_mid = DB_THREAD_ID, DB_MSG_ID
         for _i in range(12):
             tid, mid = get_phash_ids()
-            if not DB_THREAD_ID and tid:
-                DB_THREAD_ID = tid
-            if not DB_MSG_ID and mid:
-                DB_MSG_ID = mid
-            if DB_MSG_ID:
+            if not r_tid and tid:
+                r_tid = tid
+            if not r_mid and mid:
+                r_mid = mid
+            if r_mid:
                 break
             await asyncio.sleep(0.5)
+        # try fetch again if we have ids now
+        if not msg and r_tid and r_mid:
+            try:
+                ch = self.bot.get_channel(r_tid) or await self.bot.fetch_channel(r_tid)
+                msg = await ch.fetch_message(r_mid)
+            except Exception:
+                msg = None
             except Exception:
                 msg = None
         # wait up to 6s for runtime ids to be published by phash_db_board
+        r_tid, r_mid = DB_THREAD_ID, DB_MSG_ID
         for _i in range(12):
             tid, mid = get_phash_ids()
-            if not DB_THREAD_ID and tid:
-                DB_THREAD_ID = tid
-            if not DB_MSG_ID and mid:
-                DB_MSG_ID = mid
-            if DB_MSG_ID:
+            if not r_tid and tid:
+                r_tid = tid
+            if not r_mid and mid:
+                r_mid = mid
+            if r_mid:
                 break
             await asyncio.sleep(0.5)
+        # try fetch again if we have ids now
+        if not msg and r_tid and r_mid:
+            try:
+                ch = self.bot.get_channel(r_tid) or await self.bot.fetch_channel(r_tid)
+                msg = await ch.fetch_message(r_mid)
+            except Exception:
+                msg = None
         if not msg:
             if STRICT:
                 log.warning("[phash-db-edit-fix] strict edit only; DB message not found in thread/log channel; skipping.")
