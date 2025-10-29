@@ -14,7 +14,7 @@ except Exception:
 
 from nixe.helpers.persona import yandere
 from nixe.helpers.lucky_classifier import classify_image_meta
-# lazy import classify_lucky_pull inside _inline_gemini
+# (lazy import of classify_lucky_pull at runtime)
 
 log = logging.getLogger(__name__)
 
@@ -150,6 +150,17 @@ class LuckyPullGuard(commands.Cog):
         return None, None
 
     async def _inline_gemini(self, images: List[discord.Attachment], timeout_ms: int) -> Tuple[Optional[str], Optional[float], str]:
+        try:
+            import importlib, logging
+            _log = logging.getLogger(__name__)
+            _mod = importlib.import_module('nixe.helpers.gemini_bridge')
+            classify_lucky_pull = getattr(_mod, 'classify_lucky_pull', None)
+            if not callable(classify_lucky_pull):
+                raise AttributeError('classify_lucky_pull missing in gemini_bridge')
+        except Exception as e:
+            if getattr(self, 'debug', False):
+                _log.warning('[lpg:inline] gemini unavailable (lazy import failed): %r', e)
+            return 'other', 0.0
         if not self.gem_enable:
             if self.debug: log.warning("[lpg:inline] skip reason=gemini_disabled")
             return None, None, "skip"

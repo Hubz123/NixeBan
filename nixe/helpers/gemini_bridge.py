@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import logging, asyncio, os, json as _json
-from nixe.helpers.env_reader import get as _cfg_get
 from typing import Dict, List, Optional
 
 log = logging.getLogger(__name__)
@@ -13,7 +12,6 @@ _JSON_SYS = (
     "and action buttons like 'Confirm', 'Recruit Again', 'Continue Herald', or headers like 'RESCUE RESULTS'. "
     "Return STRICT JSON ONLY: {'label': 'lucky_pull'|'other', 'confidence': 0..1}."
 )
-
 _JSON_USER_TEMPLATE = (
     "Task: Decide if this image is a gacha multi-pull RESULT screen.
 "
@@ -23,9 +21,8 @@ _JSON_USER_TEMPLATE = (
 "
     "Hints: {hints}
 "
-    "Return strictly JSON like {\"label\":\"lucky_pull\",\"confidence\":0.92}."
+    "Return strictly JSON like {\"label\": \"lucky_pull\", \"confidence\": 0.92}."
 )
-
 async def _gemini_call(imgs: List[bytes], *, api_key: str, model: str, timeout_ms: int, hints: str="") -> Dict:
     try:
         import google.generativeai as genai  # type: ignore
