@@ -8,8 +8,9 @@ from discord.ext import commands
 
 log = logging.getLogger(__name__)
 
-API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-DEFAULT_MODEL = os.getenv("LUCKYPULL_GEMINI_MODEL", "gemini-2.5-flash")
+from nixe.helpers.env_reader import get as _cfg_get
+API_KEY = _cfg_get('GEMINI_API_KEY') or os.getenv("GOOGLE_API_KEY")
+DEFAULT_MODEL = _cfg_get('GEMINI_MODEL', 'gemini-2.5-flash')
 
 class GeminiHealth(commands.Cog):
     def __init__(self, bot: commands.Bot):
