@@ -8,12 +8,31 @@ NIXE main.py — ready for Render (web service) & local run.
 - Autoloads cogs (prefer project loader; fallback to autodiscover nixe.cogs).
 - No manual auto-restart loop (let discord.py handle reconnects).
 """
+# --- early native log silencer (set BEFORE any gRPC-backed import) -----------
+def _silence_native_logs():
+    # Load .env earliest so GRPC_* set here override defaults
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(override=True)
+    except Exception:
+        pass
+    # Suppress gRPC/absl native spam like "ALTS creds ignored..." etc.
+    import os as _os
+    _os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
+    # 3 => FATAL only (hide WARNING/ERROR from native libs)
+    _os.environ.setdefault("GLOG_minloglevel", "3")
+    # ensure tracing off
+    _os.environ.setdefault("GRPC_TRACE", "")
+
+_silence_native_logs()
+
 
 import os
 import sys
 import asyncio
 import logging
 import json
+import contextlib
 from datetime import datetime, timezone
 
 # --- optional .env loader (works locally; harmless on Render) -----------------
@@ -153,9 +172,7 @@ async def start_web(port: int):
     finally:
         with contextlib.suppress(Exception):
             await runner.cleanup()
-
-# --- glue --------------------------------------------------------------------
-import contextlib
+# --- glue --------------------------------------------------------------
 
 async def _run_bot(token: str):
     # Standard start; no manual restart loop (discord.py handles reconnects)
