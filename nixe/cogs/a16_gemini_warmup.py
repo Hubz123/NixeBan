@@ -1,35 +1,49 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
-import asyncio, logging, time, base64
+import asyncio, os
 from discord.ext import commands
-from nixe.helpers.env_reader import get as _cfg_get, get_int as _cfg_int, get_bool01 as _cfg_bool01
-log = logging.getLogger(__name__)
-_PNG_1x1 = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAoMBgV31vHUAAAAASUVORK5CYII=")
+
 class GeminiWarmup(commands.Cog):
-    def __init__(self, bot): self.bot = bot; self._once=False
-    @commands.Cog.listener()
-    async def on_ready(self):
-        if self._once: return
-        self._once=True
-        asyncio.create_task(self._go(), name="gemini-warmup")
-    async def _go(self):
+    def __init__(self, bot):
+        self.bot = bot
+        self._task = asyncio.create_task(self._run())
+
+    async def _run(self):
+        await self.bot.wait_until_ready()
         try:
-            if _cfg_bool01("GEMINI_WARMUP_ENABLE","1")!="1": 
-                log.info("[gemini-warmup] disabled"); return
-            tout = _cfg_int("GEMINI_WARMUP_TIMEOUT_MS", 4000)
-        except Exception as e:
-            log.warning("[gemini-warmup] cfg fail: %r", e); return
+            tout = int(os.getenv("LUCKYPULL_GEM_TIMEOUT_MS","20000"))
+        except Exception:
+            tout = 20000
+
+        # Try to generate a valid 128x128 RGB JPEG (avoid 1x1 PNG which breaks Gemini)
+        img_bytes = None
         try:
-            import importlib, time
-            mod = importlib.import_module("nixe.helpers.gemini_bridge")
-            func = getattr(mod, "classify_lucky_pull", None)
-            if not callable(func): raise RuntimeError("classify_lucky_pull missing")
-            t0=time.perf_counter()
-            label, conf = await func([_PNG_1x1], hints="warmup", timeout_ms=tout)
-            dt=int((time.perf_counter()-t0)*1000)
-            log.info("[gemini-warmup] label=%s conf=%.3f in %dms", label, conf, dt)
+            from io import BytesIO
+            try:
+                from PIL import Image, ImageDraw
+            except Exception:
+                Image = None
+            if Image is not None:
+                im = Image.new("RGB", (128,128), (32,32,32))
+                dr = ImageDraw.Draw(im)
+                dr.rectangle((16,16,112,112), outline=(200,200,200), width=2)
+                buf = BytesIO()
+                im.save(buf, "JPEG", quality=85, optimize=True)
+                img_bytes = buf.getvalue()
+        except Exception as _e:
+            img_bytes = None
+
+        try:
+            import nixe.helpers.gemini_bridge as gb  # will be safety-patched by a16_gemini_safety_patch
+            images = [img_bytes] if img_bytes else None
+            label, conf = await gb.classify_lucky_pull(images, hints="warmup", timeout_ms=tout)
+            meta = getattr(gb, "LAST_META", {})
+            fb = meta.get("fallback", False)
+            if getattr(self.bot, "logger", None):
+                self.bot.logger.info("[gemini-warmup] label=%s conf=%.3f fallback=%s", label, float(conf), fb)
         except Exception as e:
-            log.warning("[gemini-warmup] warmup failed: %r", e)
-async def setup(bot): 
-    try: await bot.add_cog(GeminiWarmup(bot)); log.info("[gemini-warmup] loaded")
-    except Exception as e: log.error("[gemini-warmup] setup failed: %r", e)
+            # Never escalate on warmup
+            if getattr(self.bot, "logger", None):
+                self.bot.logger.info("[gemini-warmup] skipped or neutral: %r", e)
+
+async def setup(bot):
+    await bot.add_cog(GeminiWarmup(bot))

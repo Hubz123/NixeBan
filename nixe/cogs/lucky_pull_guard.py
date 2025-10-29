@@ -13,6 +13,36 @@ except Exception:
     pass
 
 from nixe.helpers.persona import yandere
+def _load_yandere_persona():
+    path = os.getenv("YANDERE_TEMPLATES_PATH") or "nixe/config/persona_yandere.json"
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        tones = data.get("tones", {})
+        weights = data.get("random_weights", {"soft":0.5,"agro":0.3,"sharp":0.2})
+        return tones, weights
+    except Exception:
+        # fallback minimal (won't block if file missing)
+        return {
+            "soft": ["{mention} yuk pindah ke {redir}~"],
+            "agro": ["{mention} pindah ke {redir}."],
+            "sharp": ["{mention} {redir}. Sekarang."]
+        }, {"soft":0.5,"agro":0.3,"sharp":0.2}
+
+def _pick_yandere_line():
+    mode = os.getenv("YANDERE_TONE_MODE","auto").strip().lower()
+    fixed = os.getenv("YANDERE_TONE_FIXED","soft").strip().lower()
+    tones, weights = _load_yandere_persona()
+    keys = ["soft","agro","sharp"]
+    if mode == "fixed" and fixed in tones and tones[fixed]:
+        tone = fixed
+    else:
+        w = [float(weights.get(k,0)) for k in keys]
+        if sum(w) <= 0: w = [1,1,1]
+        tone = random.choices(keys, weights=w, k=1)[0]
+    templs = tones.get(tone) or tones.get("soft") or ["{mention} ke {redir}"]
+    return random.choice(templs)
+
 from nixe.helpers.lucky_classifier import classify_image_meta
 # (lazy import of classify_lucky_pull at runtime)
 

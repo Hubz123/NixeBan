@@ -1,81 +1,93 @@
-
 from __future__ import annotations
-import inspect
-from typing import Any, Tuple
+import asyncio, os, inspect
+from typing import Any, Tuple, List
 from discord.ext import commands
 
-FALLBACK_MESSAGE = "Unable to process input image"
-
-def _log(bot, level: str, msg: str):
-    try:
-        getattr(bot.logger, level)(msg)
-    except Exception:
-        print(f"[gemini-safety:{level}] {msg}")
-
-def _normalize_result(res: Any) -> Tuple[str, float]:
-    # Accept (label, conf) tuple or dict-like
-    if isinstance(res, tuple) and len(res) == 2:
-        return res[0], float(res[1])
-    if isinstance(res, dict):
-        label = res.get("label") or res.get("prediction") or res.get("class") or "other"
-        conf = res.get("conf") or res.get("confidence") or res.get("score") or 0.0
-        try:
-            conf = float(conf)
-        except Exception:
-            conf = 0.0
-        return str(label), conf
-    # Fallback
-    return "other", 0.0
-
-async def _call_maybe_async(fn, *args, **kwargs):
-    res = fn(*args, **kwargs)
-    if inspect.isawaitable(res):
-        res = await res
-    return res
-
 class GeminiSafetyPatch(commands.Cog):
-    """Patch gemini_bridge.classify_lucky_pull to be robust against
-    image processing errors and mixed async/sync implementations."""
     def __init__(self, bot):
         self.bot = bot
-        self._apply_patch()
-
-    def _apply_patch(self):
+        # Lazy import so the project structure is respected
         try:
-            import nixe.helpers.gemini_bridge as gb
+            import nixe.helpers.gemini_bridge as gb  # type: ignore
         except Exception as e:
-            _log(self.bot, "warning", f"gemini_bridge not found: {e!r}")
+            # Don't crash import: keep Cog loadable; log via bot logger if available
+            if getattr(bot, "logger", None):
+                bot.logger.warning("[gemini-safety] import gemini_bridge failed: %r", e)
+            self._gb = None
             return
-
-        orig = getattr(gb, "classify_lucky_pull", None)
-        if not callable(orig):
-            _log(self.bot, "warning", "classify_lucky_pull not callable or missing")
+        self._gb = gb
+        self._orig = getattr(gb, "classify_lucky_pull", None)
+        if not callable(self._orig):
+            if getattr(bot, "logger", None):
+                bot.logger.warning("[gemini-safety] classify_lucky_pull not found; skip patch")
             return
-
+        # expose LAST_META
+        try:
+            if not hasattr(gb, "LAST_META"):
+                gb.LAST_META = {}
+        except Exception:
+            pass
+        # install patch
         async def safe_classify(*args, **kwargs):
+            tout_ms = _read_int_env("LUCKYPULL_GEM_TIMEOUT_MS", 20000)
+            # propagate/override timeout_ms param
+            if "timeout_ms" not in kwargs or not kwargs.get("timeout_ms"):
+                kwargs["timeout_ms"] = tout_ms
             try:
-                res = await _call_maybe_async(orig, *args, **kwargs)
-                return _normalize_result(res)
-            except Exception as e:
-                msg = str(e)
-                if FALLBACK_MESSAGE in msg:
-                    # Retry without image inputs, force text only
-                    kw = dict(kwargs)
-                    for k in ("attachments", "images", "image", "file", "files"):
-                        if k in kw:
-                            kw[k] = None
-                    kw["force_text_only"] = True
-                    try:
-                        res2 = await _call_maybe_async(orig, *args, **kw)
-                        _log(self.bot, "warning", "[gemini-safety] image failed; fallback text-only succeeded")
-                        return _normalize_result(res2)
-                    except Exception as e2:
-                        _log(self.bot, "warning", f"[gemini-safety] fallback also failed: {e2!r}")
-                        raise
-                raise
+                res = await asyncio.wait_for(_call(self._orig, *args, **kwargs), timeout=max(1, tout_ms)//1000)
+                _set_last_meta(self._gb, fallback=False)
+                return _normalize(res)
+            except Exception as e1:
+                # Known image processing errors -> mark fallback and return neutral
+                _set_last_meta(self._gb, fallback=True)
+                if getattr(self.bot, "logger", None):
+                    self.bot.logger.warning("[gemini-safety] classify error, fallback: %r", e1)
+                # best-effort second try with shorter timeout if possible
+                try:
+                    res2 = await asyncio.wait_for(_call(self._orig, *args, **kwargs), timeout=3)
+                    _set_last_meta(self._gb, fallback=True)
+                    return _normalize(res2)
+                except Exception:
+                    # final neutral
+                    return ("other", 0.0)
 
         setattr(gb, "classify_lucky_pull", safe_classify)
-        _log(self.bot, "info", "classify_lucky_pull patched for image-fallback and async-safe")
+
+    def cog_unload(self):
+        if self._gb and getattr(self, "_orig", None):
+            try:
+                setattr(self._gb, "classify_lucky_pull", self._orig)
+            except Exception:
+                pass
+
+async def _call(fn, *args, **kwargs):
+    res = fn(*args, **kwargs)
+    if inspect.isawaitable(res):
+        return await res
+    return res
+
+def _read_int_env(key: str, default: int) -> int:
+    try:
+        return int(os.getenv(key, str(default)))
+    except Exception:
+        return default
+
+def _set_last_meta(gb: Any, fallback: bool):
+    try:
+        gb.LAST_META = {"fallback": bool(fallback)}
+    except Exception:
+        pass
+
+def _normalize(res: Any) -> Tuple[str, float]:
+    # Accept ('label', conf) or dict-like {'label':..., 'conf':...}
+    try:
+        if isinstance(res, (list, tuple)) and len(res) >= 2:
+            return (str(res[0]), float(res[1]))
+        if isinstance(res, dict):
+            return (str(res.get("label", "other")), float(res.get("conf", 0.0)))
+    except Exception:
+        pass
+    return ("other", 0.0)
 
 async def setup(bot):
     await bot.add_cog(GeminiSafetyPatch(bot))
