@@ -29,7 +29,8 @@ class PhashImagephisingWatcher(commands.Cog):
         await self.bot.wait_until_ready()
         await asyncio.sleep(1)
         tag = "(no-fallback)" if NO_FALLBACK else f"(fallback log={LOG_CH_ID})"
-        log.info("[phash-inbox] target dest id=%s %s", DEST_THREAD_ID, tag)
+        tid, mid = get_phash_ids()
+        log.info("[phash-inbox] target dest id=%s %s", tid or DEST_THREAD_ID, tag)
 
     def _is_src(self, ch: discord.abc.GuildChannel) -> bool:
         try:
@@ -43,10 +44,12 @@ class PhashImagephisingWatcher(commands.Cog):
         return False
 
     async def _get_dest(self) -> discord.abc.GuildChannel | None:
-        if not DEST_THREAD_ID:
+        tid, mid = get_phash_ids()
+        dynamic_dest = int(tid or DEST_THREAD_ID or 0)
+        if not dynamic_dest:
             return None
         try:
-            d = self.bot.get_channel(DEST_THREAD_ID) or await self.bot.fetch_channel(DEST_THREAD_ID)
+            d = self.bot.get_channel(dynamic_dest) or await self.bot.fetch_channel(dynamic_dest)
             if isinstance(d, discord.Thread) and getattr(d, "archived", False):
                 try:
                     await d.edit(archived=False, locked=False, reason="auto-unarchive phash db thread")
@@ -100,8 +103,10 @@ class PhashImagephisingWatcher(commands.Cog):
                         uniq_d.add(h); cur_d.append(h)
             except Exception:
                 pass
-        if (cur_p or cur_d) and DEST_MSG_ID:
-            await self._commit(dest, DEST_MSG_ID, cur_p, cur_d)
+        tid, mid = get_phash_ids()
+        runtime_msg = int(mid or DEST_MSG_ID or 0)
+        if (cur_p or cur_d) and runtime_msg:
+            await self._commit(dest, runtime_msg, cur_p, cur_d)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(PhashImagephisingWatcher(bot))

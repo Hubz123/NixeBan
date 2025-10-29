@@ -55,14 +55,15 @@ class PhashRescanner(commands.Cog):
         if self._ready: return
         self._ready = True
         await asyncio.sleep(1.0)
-        log.info("[phash-rescanner] source=%s db_thread = get_phash_ids()[0],
-                 SRC_THREAD_ID or SRC_THREAD_NAME, DB_THREAD_ID, DB_MSG_ID)
+        tid, mid = get_phash_ids()
+        log.info("[phash-rescanner] source=%s db_thread=%s db_msg=%s", SRC_THREAD_ID or SRC_THREAD_NAME, tid or DB_THREAD_ID, mid or DB_MSG_ID)
         if AUTO_BACKFILL and not self._backfill_once:
             self._backfill_once = True
             try:
                 await self._run_backfill(BACKFILL_LIMIT or None)
             except Exception:
                 log.exception("[phash-rescanner] autobackfill failed")
+
 
     async def _resolve_board_tokens(self) -> Set[str]:
         msg = await get_pinned_db_message(self.bot)
@@ -80,7 +81,9 @@ class PhashRescanner(commands.Cog):
                 if isinstance(ch, discord.Thread):
                     src = ch
             else:
-                dbth = self.bot.get_channel(DB_THREAD_ID) or await self.bot.fetch_channel(DB_THREAD_ID)
+                tid, mid = get_phash_ids()
+                rtid = tid or DB_THREAD_ID
+                dbth = self.bot.get_channel(rtid) or await self.bot.fetch_channel(rtid)
                 parent = getattr(dbth, "parent", None)
                 if parent:
                     async for t in parent.archived_threads(limit=200, private=False):

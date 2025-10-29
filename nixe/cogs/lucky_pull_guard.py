@@ -122,9 +122,11 @@ class LuckyPullGuard(commands.Cog):
         label, conf = await self._classify(img_bytes)
         if label=="lucky" and conf>=self.threshold:
             if self.delete_on_guard:
-                try: await message.delete()
-                log.info('[lpg] deleted a message in %s (reason=lucky pull)', message.channel.id)
-                except Exception: pass
+                try:
+                    await message.delete()
+                    log.info('[lpg] deleted a message in %s (reason=lucky pull)', message.channel.id)
+                except Exception:
+                    pass
             if self.mention_user:
                 try:
                     mention = message.author.mention
