@@ -2,6 +2,7 @@
 # Ensure pHash-DB thread exists under log channel and pin board message
 import asyncio, logging, os
 from discord.ext import commands
+from nixe.state_runtime import set_phash_ids
 import discord
 from nixe import config
 log = logging.getLogger(__name__)

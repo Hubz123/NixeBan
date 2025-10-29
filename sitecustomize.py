@@ -1,8 +1,6 @@
-# Auto-imported by Python if present on sys.path.
-# This runs extremely early, before most imports, to force quiet native logs.
+# sitecustomize.py — auto-imported very early to silence native gRPC/absl spam
 import os
-# Respect any value already set by the environment; else enforce strict silence.
-os.environ.setdefault("GRPC_VERBOSITY", "NONE")   # DEBUG/INFO/ERROR/NONE
-os.environ.setdefault("GLOG_minloglevel", "3")    # 3 -> FATAL only
+os.environ.setdefault("GRPC_VERBOSITY", "NONE")
+os.environ.setdefault("GLOG_minloglevel", "3")
 os.environ.setdefault("GRPC_TRACE", "")
-# If using dotenv later, those values can still override via override=True.
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")

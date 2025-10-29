@@ -1,93 +1,57 @@
+# nixe/cogs/a16_gemini_safety_patch.py
+# Patch Gemini calls to be async-safe, use image cleaning, and avoid warning spam on timeouts.
 from __future__ import annotations
-import asyncio, os, inspect
-from typing import Any, Tuple, List
-from discord.ext import commands
+import asyncio, inspect, os, types
 
-class GeminiSafetyPatch(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-        # Lazy import so the project structure is respected
-        try:
-            import nixe.helpers.gemini_bridge as gb  # type: ignore
-        except Exception as e:
-            # Don't crash import: keep Cog loadable; log via bot logger if available
-            if getattr(bot, "logger", None):
-                bot.logger.warning("[gemini-safety] import gemini_bridge failed: %r", e)
-            self._gb = None
-            return
-        self._gb = gb
-        self._orig = getattr(gb, "classify_lucky_pull", None)
-        if not callable(self._orig):
-            if getattr(bot, "logger", None):
-                bot.logger.warning("[gemini-safety] classify_lucky_pull not found; skip patch")
-            return
-        # expose LAST_META
-        try:
-            if not hasattr(gb, "LAST_META"):
-                gb.LAST_META = {}
-        except Exception:
-            pass
-        # install patch
-        async def safe_classify(*args, **kwargs):
-            tout_ms = _read_int_env("LUCKYPULL_GEM_TIMEOUT_MS", 20000)
-            # propagate/override timeout_ms param
-            if "timeout_ms" not in kwargs or not kwargs.get("timeout_ms"):
-                kwargs["timeout_ms"] = tout_ms
-            try:
-                res = await asyncio.wait_for(_call(self._orig, *args, **kwargs), timeout=max(1, tout_ms)//1000)
-                _set_last_meta(self._gb, fallback=False)
-                return _normalize(res)
-            except Exception as e1:
-                # Known image processing errors -> mark fallback and return neutral
-                _set_last_meta(self._gb, fallback=True)
-                if getattr(self.bot, "logger", None):
-                    self.bot.logger.warning("[gemini-safety] classify error, fallback: %r", e1)
-                # best-effort second try with shorter timeout if possible
+try:
+    from nixe.helpers.image_cleaner import clean_for_gemini_bytes
+except Exception:
+    clean_for_gemini_bytes = None
+
+def _with_timeout_and_clean(fn, *, timeout_ms: int):
+    async def _wrap(*args, **kwargs):
+        # Clean image-like payloads in *args/**kwargs
+        def _clean_obj(x):
+            if clean_for_gemini_bytes and isinstance(x, (bytes, bytearray)):
                 try:
-                    res2 = await asyncio.wait_for(_call(self._orig, *args, **kwargs), timeout=3)
-                    _set_last_meta(self._gb, fallback=True)
-                    return _normalize(res2)
+                    return clean_for_gemini_bytes(x)
                 except Exception:
-                    # final neutral
-                    return ("other", 0.0)
+                    return x
+            if isinstance(x, (list, tuple)):
+                return type(x)(_clean_obj(xx) for xx in x)
+            if isinstance(x, dict):
+                return {k: _clean_obj(v) for k, v in x.items()}
+            return x
 
-        setattr(gb, "classify_lucky_pull", safe_classify)
-
-    def cog_unload(self):
-        if self._gb and getattr(self, "_orig", None):
-            try:
-                setattr(self._gb, "classify_lucky_pull", self._orig)
-            except Exception:
-                pass
-
-async def _call(fn, *args, **kwargs):
-    res = fn(*args, **kwargs)
-    if inspect.isawaitable(res):
-        return await res
-    return res
-
-def _read_int_env(key: str, default: int) -> int:
-    try:
-        return int(os.getenv(key, str(default)))
-    except Exception:
-        return default
-
-def _set_last_meta(gb: Any, fallback: bool):
-    try:
-        gb.LAST_META = {"fallback": bool(fallback)}
-    except Exception:
-        pass
-
-def _normalize(res: Any) -> Tuple[str, float]:
-    # Accept ('label', conf) or dict-like {'label':..., 'conf':...}
-    try:
-        if isinstance(res, (list, tuple)) and len(res) >= 2:
-            return (str(res[0]), float(res[1]))
-        if isinstance(res, dict):
-            return (str(res.get("label", "other")), float(res.get("conf", 0.0)))
-    except Exception:
-        pass
-    return ("other", 0.0)
+        cargs = _clean_obj(list(args))
+        ckwargs = _clean_obj(dict(kwargs))
+        try:
+            return await asyncio.wait_for(fn(*cargs, **ckwargs), timeout=timeout_ms/1000.0)
+        except Exception:
+            # On any error/timeout, return neutral result rather than warning-spam
+            # Lucky-pull style: ("other", 0.0)
+            # Phish style: {"label":"other","conf":0.0}
+            return ("other", 0.0)
+    return _wrap
 
 async def setup(bot):
-    await bot.add_cog(GeminiSafetyPatch(bot))
+    # LUCKY PULL bridge
+    try:
+        import nixe.helpers.gemini_bridge as gbridge  # classify_lucky_pull([...], ...)
+        tout_ms = int(os.getenv("LUCKYPULL_GEM_TIMEOUT_MS", "20000"))
+        if hasattr(gbridge, "classify_lucky_pull") and asyncio.iscoroutinefunction(gbridge.classify_lucky_pull):
+            gbridge.classify_lucky_pull = _with_timeout_and_clean(gbridge.classify_lucky_pull, timeout_ms=tout_ms)
+    except Exception:
+        pass
+
+    # PHISH bridge — wrap any coroutine with "classify" & "phish" in its name
+    try:
+        import nixe.helpers.gemini_phish as gphish
+        ptout_ms = int(os.getenv("PHISH_GEMINI_MAX_LATENCY_MS", "12000"))
+        for name in dir(gphish):
+            if "classify" in name and "phish" in name:
+                fn = getattr(gphish, name, None)
+                if asyncio.iscoroutinefunction(fn):
+                    setattr(gphish, name, _with_timeout_and_clean(fn, timeout_ms=ptout_ms))
+    except Exception:
+        pass

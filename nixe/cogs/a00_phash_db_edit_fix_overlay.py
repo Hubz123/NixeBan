@@ -5,6 +5,7 @@ import logging
 import discord
 from discord.ext import commands
 from nixe.helpers.phash_board import discover_db_message_id
+from nixe.state_runtime import get_phash_ids
 
 log = logging.getLogger(__name__)
 
@@ -68,8 +69,28 @@ class PhashDbEditFixOverlay(commands.Cog):
                         msg = await ch.fetch_message(did)
                     except Exception:
                         msg = None
+        # wait up to 6s for runtime ids to be published by phash_db_board
+        for _i in range(12):
+            tid, mid = get_phash_ids()
+            if not DB_THREAD_ID and tid:
+                DB_THREAD_ID = tid
+            if not DB_MSG_ID and mid:
+                DB_MSG_ID = mid
+            if DB_MSG_ID:
+                break
+            await asyncio.sleep(0.5)
             except Exception:
                 msg = None
+        # wait up to 6s for runtime ids to be published by phash_db_board
+        for _i in range(12):
+            tid, mid = get_phash_ids()
+            if not DB_THREAD_ID and tid:
+                DB_THREAD_ID = tid
+            if not DB_MSG_ID and mid:
+                DB_MSG_ID = mid
+            if DB_MSG_ID:
+                break
+            await asyncio.sleep(0.5)
         if not msg:
             if STRICT:
                 log.warning("[phash-db-edit-fix] strict edit only; DB message not found in thread/log channel; skipping.")

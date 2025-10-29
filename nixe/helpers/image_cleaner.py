@@ -4,12 +4,7 @@ import io
 from PIL import Image
 
 def clean_for_gemini_bytes(b: bytes) -> bytes:
-    """
-    Normalize various image bytes (webp, heic, etc.) to PNG bytes for Gemini.
-    Drops alpha if necessary; resizes if absurdly large.
-    """
     im = Image.open(io.BytesIO(b)).convert("RGB")
-    # Optional: clamp max side to 2048 to avoid excessive payload
     MAX = 2048
     w, h = im.size
     if max(w, h) > MAX:

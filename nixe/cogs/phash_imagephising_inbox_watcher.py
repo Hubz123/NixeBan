@@ -3,6 +3,7 @@
 from __future__ import annotations
 import os, logging, asyncio, discord
 from discord.ext import commands
+from nixe.state_runtime import get_phash_ids
 from nixe.helpers.img_hashing import phash_list_from_bytes, dhash_list_from_bytes
 
 log = logging.getLogger(__name__)

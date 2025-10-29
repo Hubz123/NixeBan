@@ -5,6 +5,7 @@ from __future__ import annotations
 import os, asyncio, json, logging, discord
 from typing import Set, Optional
 from discord.ext import commands
+from nixe.state_runtime import get_phash_ids
 
 from nixe.helpers import img_hashing
 from nixe.helpers.phash_board import get_pinned_db_message, edit_pinned_db
@@ -54,7 +55,7 @@ class PhashRescanner(commands.Cog):
         if self._ready: return
         self._ready = True
         await asyncio.sleep(1.0)
-        log.info("[phash-rescanner] source=%s db_thread=%s db_msg=%s",
+        log.info("[phash-rescanner] source=%s db_thread = get_phash_ids()[0],
                  SRC_THREAD_ID or SRC_THREAD_NAME, DB_THREAD_ID, DB_MSG_ID)
         if AUTO_BACKFILL and not self._backfill_once:
             self._backfill_once = True

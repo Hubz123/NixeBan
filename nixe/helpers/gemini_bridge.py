@@ -1,125 +1,114 @@
-
-# -*- coding: utf-8 -*-
+# nixe/helpers/gemini_bridge.py
 from __future__ import annotations
-import asyncio
+import asyncio, json, logging, os
+from typing import Iterable, Tuple, Any
+log = logging.getLogger("nixe.helpers.gemini_bridge")
 try:
-    from nixe.helpers.image_cleaner import clean_for_gemini_bytes
+    from nixe.helpers.image_cleaner import clean_for_gemini_bytes  # type: ignore
 except Exception:
-    clean_for_gemini_bytes = None, logging, json as _json
-from typing import List, Tuple
+    clean_for_gemini_bytes = None
 
-# Read API key / model via env_reader (runtime_env.json / secrets.json / ENV)
-try:
-    from nixe.helpers.env_reader import get as _cfg_get
-except Exception:
-    import os
-    def _cfg_get(key: str, default: str = "") -> str:
-        return str(os.environ.get(key, default)).strip()
+def _load_runtime_env() -> dict:
+    path = os.getenv("RUNTIME_ENV_PATH") or "nixe/config/runtime_env.json"
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
-log = logging.getLogger(__name__)
+def _get_model_name() -> str:
+    env = _load_runtime_env()
+    return os.getenv("GEMINI_MODEL") or env.get("GEMINI_MODEL") or "gemini-2.5-flash"
 
-_JSON_SYS = """You are an image classifier specialized in detecting
-GACHA / LUCKY-PULL RESULT screens across many games.
-Typical cues:
-- multiple vertical card/panel strips
-- rarity frames/colors (SSR / SR / R / UR / N), sometimes 'UP'
-- star icons (e.g., 3★..6★), rainbow/aurora glow
-- labels like NEW / NEW!!
-- pity shards counters (×60 / ×150 / ×200 / ×440 / ×1000)
-- buttons like Confirm / Recruit Again / Continue Herald
-Return STRICT JSON ONLY: {"label": "lucky_pull"|"other", "confidence": 0..1}.
-"""
+def _get_api_key() -> str | None:
+    return os.getenv("GEMINI_API_KEY")
 
-_JSON_USER_TEMPLATE = """Task: Decide if this image is a gacha multi-pull RESULT screen.
-Look for cues listed above (vertical cards; SSR/SR/R/UR/N; stars; NEW; shards ×60/×150/×200/×440/×1000;
-buttons Confirm/Recruit Again/Continue Herald; headers like RESCUE RESULTS).
-Hints: {hints}
-Return strictly a JSON object like {{"label":"lucky_pull","confidence":0.92}}.
-"""
+def _mk_image_part(b: bytes) -> dict:
+    return {"mime_type": "image/png", "data": b}
 
-def _detect_mime(b: bytes) -> str:
-    # Simple header sniffing; default to JPEG for compression-friendly payloads
-    if not b:
-        return "image/jpeg"
-    sig = b[:16]
-    if sig.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if sig[:3] == b"\xff\xd8\xff":
-        return "image/jpeg"
-    if sig[:6] in (b"GIF87a", b"GIF89a"):
-        return "image/gif"
-    return "image/jpeg"
+def _parse_json(s: str) -> dict | None:
+    s = s.strip()
+    if s.startswith("```"):
+        s = s.strip("`")
+        if s.startswith("json"):
+            s = s[len("json"):].strip()
+    try:
+        return json.loads(s)
+    except Exception:
+        import re
+        m = re.search(r'\{.*\}', s, re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except Exception:
+                return None
+        return None
 
-async def _gemini_call(images: List[bytes], *, hints: str = "", timeout_ms: int = 10000) -> Tuple[str, float]:
-    """Call Gemini in JSON mode. Returns (label, confidence)."""
+def _build_prompt(hints: str = "") -> str:
+    base = "Klasifikasikan apakah gambar ini merupakan 'lucky pull' (gacha result screenshot/art)."
+    if hints:
+        base += f" Konteks: {hints}."
+    base += " Jawab dalam JSON murni: {\"label\": \"lucky\"|\"other\", \"conf\": 0..1}."
+    return base
+
+async def _gemini_generate(parts: list[Any], *, timeout_ms: int) -> dict | None:
     try:
         import google.generativeai as genai  # type: ignore
     except Exception as e:
-        log.warning("[gemini] google-generativeai not installed: %r", e)
-        return "other", 0.0
-
-    api_key = _cfg_get("GEMINI_API_KEY", "")
+        log.warning("[gemini] sdk import failed: %r", e)
+        return None
+    api_key = _get_api_key()
     if not api_key:
-        log.warning("[gemini] GEMINI_API_KEY is empty")
-        return "other", 0.0
-
-    model_name = _cfg_get("GEMINI_MODEL", "gemini-2.5-flash")
-    try:
+        log.warning("[gemini] missing GEMINI_API_KEY")
+        return None
+    model_name = _get_model_name()
+    def _call_sync() -> dict | None:
         genai.configure(api_key=api_key)
-        model_obj = genai.GenerativeModel(
-            model_name=model_name,
-            system_instruction=_JSON_SYS,
-            generation_config={"response_mime_type": "application/json"},
-        )
-
-        parts: List[object] = [_JSON_USER_TEMPLATE.format(hints=hints or "").strip()]
-        for b in images[: max(1, int(_cfg_get("LUCKYPULL_GEMINI_MAX_IMAGES", "1") or "1"))]:
-            parts.append({"mime_type": _detect_mime(b), "data": b})
-
-        resp = await asyncio.wait_for(
-            model_obj.generate_content_async(parts),
-            timeout=max(1.0, (timeout_ms or 10000) / 1000.0),
-        )
-        tx = getattr(resp, "text", "") or ""
-        if not tx:
-            return "other", 0.0
-
-        # Parse strict JSON; be forgiving if model wrapped in code fences.
-        tx = tx.strip()
-        if tx.startswith("```"):
-            # remove fences if any
-            tx = tx.strip("`").strip()
-            if tx.startswith("json"):
-                tx = tx[4:].strip()
         try:
-            data = _json.loads(tx)
-        except Exception:
-            # attempt to extract first JSON object
-            import re
-            m = re.search(r"\{[\s\S]*\}", tx)
-            data = _json.loads(m.group(0)) if m else {}
-
-        label = str(data.get("label", "other")).strip().lower()
-        conf = float(data.get("confidence", 0.0))
-        if label not in ("lucky_pull", "other"):
-            label = "other"
-        # Clamp confidence
-        if conf < 0.0: conf = 0.0
-        if conf > 1.0: conf = 1.0
-        return label, conf
-    except asyncio.TimeoutError:
-        log.warning("[gemini] timeout after %d ms", timeout_ms)
-        return "other", 0.0
+            model = genai.GenerativeModel(model_name)
+        except Exception as e:
+            log.warning("[gemini] model init failed: %r", e)
+            return None
+        try:
+            resp = model.generate_content(parts)
+            txt = getattr(resp, "text", None)
+            if isinstance(txt, str) and txt.strip():
+                data = _parse_json(txt)
+                return data
+            try:
+                return _parse_json(str(resp))
+            except Exception:
+                return None
+        except Exception as e:
+            log.warning("[gemini] call failed: %r", e)
+            return None
+    try:
+        return await asyncio.wait_for(asyncio.get_running_loop().run_in_executor(None, _call_sync), timeout=timeout_ms/1000.0)
     except Exception as e:
-        log.warning("[gemini] call failed: %r", e)
-        return "other", 0.0
+        log.warning("[gemini] timeout/error: %r", e)
+        return None
 
-# Public API expected by guards/warmup
-async def classify_lucky_pull(images: List[bytes], *, hints: str = "", timeout_ms: int = 10000) -> Tuple[str, float]:
-    """
-    Return ("lucky_pull" | "other", confidence 0..1).
-    """
-    return await _gemini_call(images, hints=hints, timeout_ms=timeout_ms)
-
-# marker to avoid duplicate patch
-_CLEAN_APPLIED = True
+async def classify_lucky_pull(images: Iterable[bytes] | None, *, hints: str = "", timeout_ms: int = 20000) -> Tuple[str, float]:
+    if not images:
+        return ("other", 0.0)
+    first: bytes | None = None
+    for b in images:
+        if isinstance(b, (bytes, bytearray)):
+            first = bytes(b); break
+    if first is None:
+        return ("other", 0.0)
+    if clean_for_gemini_bytes:
+        try:
+            first = clean_for_gemini_bytes(first)
+        except Exception:
+            pass
+    parts: list[Any] = [_build_prompt(hints), _mk_image_part(first)]
+    data = await _gemini_generate(parts, timeout_ms=timeout_ms)
+    if not isinstance(data, dict):
+        return ("other", 0.0)
+    label = str(data.get("label", "other")).strip().lower()
+    try: conf = float(data.get("conf", 0.0))
+    except Exception: conf = 0.0
+    if label not in ("lucky","other"): label = "other"
+    conf = max(0.0, min(1.0, conf))
+    return (label, conf)
