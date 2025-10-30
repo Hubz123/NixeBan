@@ -1,43 +1,9 @@
 
 # -*- coding: utf-8 -*-
 """
-Channel Directory / List Command
-- Robust config resolver + optional COMPACT mode (single-line per item)
-- Per-section overrides: "buttons": 0/1, "compact": 0/1
-
-Triggers:
-  • "!channel list"
-  • "nixe @channel list" / "nixe channel list"
-
-ENV keys:
-  CHANNEL_DIR_JSON_PATH           -> path to JSON (relative or absolute, '/' preferred)
-  CHANNEL_DIR_ADD_LINK_BUTTONS    -> "1"|"0" (default "1")
-  CHANNEL_DIR_SHOW_IDS            -> "1"|"0" (default "0")
-  CHANNEL_DIR_TITLE               -> default title
-  CHANNEL_DIR_COLOR               -> hex or int
-  CHANNEL_DIR_FOOTER              -> footer text
-  CHANNEL_DIR_THUMB               -> thumbnail URL
-  CHANNEL_DIR_AUTO_DELETE_SEC     -> seconds (stringified int)
-  CHANNEL_DIR_PING_ON_HELP        -> "1"|"0"
-  CHANNEL_DIR_COMPACT             -> "1"|"0" (default "0")  <<< NEW
-  CHANNEL_DIR_ITEMS_JSON          -> fallback items list JSON-string
-
-JSON file format:
-{
-  "title": "...",
-  "color": "#60a5fa",
-  "footer": "...",
-  "sections": [
-    {
-      "title": "📺 Channel Utama",
-      "buttons": 0,      // optional override
-      "compact": 1,      // optional override
-      "items": [
-        {"id": "123", "name": "{channel}", "desc": "optional"}
-      ]
-    }
-  ]
-}
+Channel Directory / List Command (robust resolver)
+- Supports COMPACT mode & BUTTONS default from JSON file (top-level) and per-section override.
+- Falls back to ENV if JSON not provided.
 """
 
 import os, json, re, logging, asyncio, pathlib
@@ -158,7 +124,8 @@ def _channel_url(guild: Optional[discord.Guild], cid: int) -> Optional[str]:
     return None
 
 def _build_view_buttons(guild: Optional[discord.Guild], items: list, limit: int = 25, enabled: bool = True) -> Optional[discord.ui.View]:
-    add_buttons = enabled and bool(int(_get("CHANNEL_DIR_ADD_LINK_BUTTONS", default="1") or "1"))
+    env_add_buttons = bool(int(_get("CHANNEL_DIR_ADD_LINK_BUTTONS", default="1") or "1"))
+    add_buttons = enabled and env_add_buttons
     if not add_buttons or guild is None:
         return None
     view = discord.ui.View()
@@ -192,7 +159,20 @@ def _build_embeds_and_views(cfg: Dict[str, Any], guild: Optional[discord.Guild])
     thumb_cfg  = cfg.get("thumbnail") or _get("CHANNEL_DIR_THUMB")
     footer = cfg.get("footer") or _get("CHANNEL_DIR_FOOTER", default="Gunakan channel sesuai fungsinya ya ✨")
     show_ids = bool(int(_get("CHANNEL_DIR_SHOW_IDS", default="0") or "0"))
-    compact_default = bool(int(_get("CHANNEL_DIR_COMPACT", default="0") or "0"))
+    # NEW: allow default compact/buttons from JSON top-level
+    json_compact = cfg.get("compact")
+    json_buttons = cfg.get("buttons")
+    compact_default = bool(int(str(json_compact)) if json_compact is not None else int(_get("CHANNEL_DIR_COMPACT", default="0") or "0"))
+    buttons_default = None if json_buttons is None else bool(int(str(json_buttons)))
+    # helper to compute per-section buttons
+    def _section_buttons(sec_buttons: Optional[int]) -> bool:
+        # if section sets it, use that; else fall back to JSON default if present; else ENV
+        if sec_buttons is not None:
+            try: return bool(int(str(sec_buttons)))
+            except Exception: return True
+        if buttons_default is not None:
+            return buttons_default
+        return bool(int(_get("CHANNEL_DIR_ADD_LINK_BUTTONS", default="1") or "1"))
 
     def _emb(title_local: str) -> discord.Embed:
         e = discord.Embed(title=title_local, color=color)
@@ -223,15 +203,13 @@ def _build_embeds_and_views(cfg: Dict[str, Any], guild: Optional[discord.Guild])
                 if not cid: continue
                 try: cid_i = int(cid)
                 except: continue
-
                 name_tpl = str(it.get("name") or "{channel}")
                 resolved_name = _resolve_name(guild, cid_i) if name_tpl == "{channel}" else name_tpl
-
                 mention = f"<#{cid}>"
                 desc = str(it.get("desc") or "")
 
                 if compact_mode:
-                    field_name = "\u200B"  # invisible
+                    field_name = "\u200B"
                     field_value = mention if not desc else f"{mention}\n{desc}"
                 else:
                     field_name = resolved_name
@@ -244,9 +222,9 @@ def _build_embeds_and_views(cfg: Dict[str, Any], guild: Optional[discord.Guild])
                 items_for_view.append({"id": cid})
                 count += 1
                 if count >= 25:
-                    out.append((e, _build_view_buttons(guild, items_for_view, 25, enabled=(sec_buttons!=0))))
+                    out.append((e, _build_view_buttons(guild, items_for_view, 25, enabled=_section_buttons(sec_buttons))))
                     e = _emb(stitle); items_for_view = []; count = 0
-            out.append((e, _build_view_buttons(guild, items_for_view, 25, enabled=(sec_buttons!=0))))
+            out.append((e, _build_view_buttons(guild, items_for_view, 25, enabled=_section_buttons(sec_buttons))))
     else:
         e = _emb(title)
         items_for_view = []
@@ -256,10 +234,8 @@ def _build_embeds_and_views(cfg: Dict[str, Any], guild: Optional[discord.Guild])
             if not cid: continue
             try: cid_i = int(cid)
             except: continue
-
             name_tpl = str(it.get("name") or "{channel}")
             resolved_name = _resolve_name(guild, cid_i) if name_tpl == "{channel}" else name_tpl
-
             mention = f"<#{cid}>"
             desc = str(it.get("desc") or "")
 
@@ -277,9 +253,9 @@ def _build_embeds_and_views(cfg: Dict[str, Any], guild: Optional[discord.Guild])
             items_for_view.append({"id": cid})
             count += 1
             if count >= 25:
-                out.append((e, _build_view_buttons(guild, items_for_view, 25)))
+                out.append((e, _build_view_buttons(guild, items_for_view, 25, enabled=_section_buttons(None))))
                 e = _emb(title); items_for_view = []; count = 0
-        out.append((e, _build_view_buttons(guild, items_for_view, 25)))
+        out.append((e, _build_view_buttons(guild, items_for_view, 25, enabled=_section_buttons(None))))
     return out
 
 def _match_natural_command(text: str) -> bool:
@@ -323,8 +299,8 @@ class ChannelDirectory(commands.Cog):
             else:
                 items = len(cfg.get("items",[]))
                 detail = f"flat items={items}"
-            compact_default = bool(int(_get("CHANNEL_DIR_COMPACT", default="0") or "0"))
-            await ctx.send(f"[chan-dir] origin: `{origin}` • {detail} • compact={int(compact_default)}")
+            compact_default = cfg.get("compact")
+            await ctx.send(f"[chan-dir] origin: `{origin}` • {detail} • compact={compact_default!r}")
 
     @commands.Cog.listener("on_message")
     async def _on_message(self, message: discord.Message):
