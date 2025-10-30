@@ -1,0 +1,13 @@
+{
+  "SUS_ATTACH_HARDENER_ENABLE": "1",
+  "SUS_ATTACH_LOG_VERBOSE": "1",
+  "SUS_ATTACH_DELETE_THRESHOLD": "3",
+  "SUS_ATTACH_MAX_BYTES": "5000000",
+  "SUS_ATTACH_CONTENT_SCAN_ENABLE": "1",
+  "SUS_ATTACH_GEMINI_ENABLE": "1",
+  "SUS_ATTACH_GEMINI_THRESHOLD": "0.85",
+  "SUS_ATTACH_GEM_TIMEOUT_MS": "12000",
+  "SUS_ATTACH_GEMINI_HINTS": "login page, connect wallet, claim reward, OTP request, QR login, suspicious URL, brand impersonation, seed phrase",
+  "SUS_ATTACH_ALWAYS_GEM": "1",
+  "SUS_ATTACH_IGNORE_CHANNELS": ""
+}

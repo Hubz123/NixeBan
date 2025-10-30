@@ -1,114 +1,205 @@
-# nixe/helpers/gemini_bridge.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
-import asyncio, json, logging, os
-from typing import Iterable, Tuple, Any
-log = logging.getLogger("nixe.helpers.gemini_bridge")
+import os, base64, logging, json, asyncio
+from typing import Iterable, Tuple, List
+
 try:
-    from nixe.helpers.image_cleaner import clean_for_gemini_bytes  # type: ignore
+    import requests
 except Exception:
-    clean_for_gemini_bytes = None
+    requests = None
 
-def _load_runtime_env() -> dict:
-    path = os.getenv("RUNTIME_ENV_PATH") or "nixe/config/runtime_env.json"
+log = logging.getLogger(__name__)
+
+API_BASES: List[str] = [
+    "https://generativelanguage.googleapis.com/v1beta",
+    "https://generativelanguage.googleapis.com/v1",
+]
+
+def _models() -> List[str]:
+    pref = (os.getenv("GEMINI_MODEL") or "").strip()
+    fallbacks = [
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-latest",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-1.5-flash-8b",
+    ]
+    out: List[str] = []
+    if pref:
+        out.append(pref)
+    for m in fallbacks:
+        if m not in out:
+            out.append(m)
+    return out
+
+def _get_key() -> str:
+    return (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
+
+def _guess_mime(data: bytes) -> str:
+    if data.startswith(b"\x89PNG"): return "image/png"
+    if data.startswith(b"\xff\xd8"): return "image/jpeg"
+    if data[:6] in (b"GIF87a", b"GIF89a"): return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP": return "image/webp"
+    return "image/png"
+
+def _post(url: str, payload: dict, timeout: float, key: str, header_key: bool):
+    headers = {"Content-Type": "application/json"}
+    if header_key:
+        headers["x-goog-api-key"] = key
+        return requests.post(url, json=payload, headers=headers, timeout=timeout)
+    else:
+        return requests.post(f"{url}?key={key}", json=payload, headers=headers, timeout=timeout)
+
+def _extract_text(resp_json: dict) -> str:
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        cands = resp_json.get("candidates") or []
+        if cands:
+            return cands[0].get("content", {}).get("parts", [{}])[0].get("text", "") or ""
     except Exception:
-        return {}
+        pass
+    return ""
 
-def _get_model_name() -> str:
-    env = _load_runtime_env()
-    return os.getenv("GEMINI_MODEL") or env.get("GEMINI_MODEL") or "gemini-2.5-flash"
-
-def _get_api_key() -> str | None:
-    return os.getenv("GEMINI_API_KEY")
-
-def _mk_image_part(b: bytes) -> dict:
-    return {"mime_type": "image/png", "data": b}
-
-def _parse_json(s: str) -> dict | None:
-    s = s.strip()
-    if s.startswith("```"):
-        s = s.strip("`")
-        if s.startswith("json"):
-            s = s[len("json"):].strip()
-    try:
-        return json.loads(s)
-    except Exception:
-        import re
-        m = re.search(r'\{.*\}', s, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except Exception:
-                return None
-        return None
-
-def _build_prompt(hints: str = "") -> str:
-    base = "Klasifikasikan apakah gambar ini merupakan 'lucky pull' (gacha result screenshot/art)."
+# ---------- Lucky Pull (existing) ----------
+def _lp_prompt(hints: str = "") -> str:
+    base = (
+        "Task: Determine if an image is a gacha/lucky-pull RESULT screen.\n"
+        "Return ONLY compact JSON: {\"label\":\"lucky|other\",\"confidence\":0..1}\n"
+        "Guidelines:\n"
+        "- 'lucky' if it shows the pull RESULT grid (10/11 cards), rarity stars (3-5★), NEW!! tag, rainbow/gold beams, or character/item tiles with stars.\n"
+        "- Include games like Genshin, Honkai, Blue Archive, HSR, Umamusume, Wuthering Waves, Nikke, etc.\n"
+        "- 'other' for chat images, memes, gameplay without result grid, banners, or loading/animation without final results.\n"
+        "Scoring:\n"
+        "- Clear result grid with stars or NEW!! -> confidence 0.85–0.98\n"
+        "- Likely result grid but small/cropped -> 0.65–0.84\n"
+        "- Unsure -> 0.30–0.64 (label 'other')\n"
+    )
     if hints:
-        base += f" Konteks: {hints}."
-    base += " Jawab dalam JSON murni: {\"label\": \"lucky\"|\"other\", \"conf\": 0..1}."
+        base += f"Hints: {hints}\n"
+    base += (
+        "Examples:\n"
+        "1) Image: 11 tiles in a row, gold/purple beams, some tiles say NEW!! -> {\"label\":\"lucky\",\"confidence\":0.92}\n"
+        "2) Image: banner art with Start/Recruit buttons, no result tiles -> {\"label\":\"other\",\"confidence\":0.15}\n"
+        "3) Image: one character splash with rainbow background (no grid) -> {\"label\":\"other\",\"confidence\":0.35}\n"
+    )
     return base
 
-async def _gemini_generate(parts: list[Any], *, timeout_ms: int) -> dict | None:
-    try:
-        import google.generativeai as genai  # type: ignore
-    except Exception as e:
-        log.warning("[gemini] sdk import failed: %r", e)
-        return None
-    api_key = _get_api_key()
-    if not api_key:
-        log.warning("[gemini] missing GEMINI_API_KEY")
-        return None
-    model_name = _get_model_name()
-    def _call_sync() -> dict | None:
-        genai.configure(api_key=api_key)
-        try:
-            model = genai.GenerativeModel(model_name)
-        except Exception as e:
-            log.warning("[gemini] model init failed: %r", e)
-            return None
-        try:
-            resp = model.generate_content(parts)
-            txt = getattr(resp, "text", None)
-            if isinstance(txt, str) and txt.strip():
-                data = _parse_json(txt)
-                return data
-            try:
-                return _parse_json(str(resp))
-            except Exception:
-                return None
-        except Exception as e:
-            log.warning("[gemini] call failed: %r", e)
-            return None
-    try:
-        return await asyncio.wait_for(asyncio.get_running_loop().run_in_executor(None, _call_sync), timeout=timeout_ms/1000.0)
-    except Exception as e:
-        log.warning("[gemini] timeout/error: %r", e)
-        return None
+def _lp_payload(img: bytes, hints: str = "") -> dict:
+    return {
+        "contents": [{
+            "parts":[
+                {"inline_data": {"mime_type": _guess_mime(img), "data": base64.b64encode(img).decode("ascii")}},
+                {"text": _lp_prompt(hints)},
+            ]
+        }],
+        "generationConfig": {"responseMimeType": "application/json"}
+    }
 
-async def classify_lucky_pull(images: Iterable[bytes] | None, *, hints: str = "", timeout_ms: int = 20000) -> Tuple[str, float]:
-    if not images:
-        return ("other", 0.0)
-    first: bytes | None = None
-    for b in images:
-        if isinstance(b, (bytes, bytearray)):
-            first = bytes(b); break
-    if first is None:
-        return ("other", 0.0)
-    if clean_for_gemini_bytes:
+async def classify_lucky_pull(images: Iterable[bytes], hints: str = "", timeout_ms: int = 10000) -> Tuple[str, float]:
+    key = _get_key()
+    imgs = list(images or [])
+    if not imgs or not key or requests is None:
+        return "other", 0.0
+    timeout = max(3.0, timeout_ms / 1000.0)
+    img = imgs[0]
+
+    # Try v1beta first
+    for model in _models():
+        url = f"{API_BASES[0]}/models/{model}:generateContent"
         try:
-            first = clean_for_gemini_bytes(first)
+            resp = await asyncio.to_thread(_post, url, _lp_payload(img, hints), timeout, key, True)
+            if resp.status_code in (400,404):
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            text = _extract_text(data) or json.dumps(data)[:400]
+            obj = json.loads(text)
+            return (str(obj.get("label","other")), float(obj.get("confidence", 0.0)))
         except Exception:
             pass
-    parts: list[Any] = [_build_prompt(hints), _mk_image_part(first)]
-    data = await _gemini_generate(parts, timeout_ms=timeout_ms)
-    if not isinstance(data, dict):
-        return ("other", 0.0)
-    label = str(data.get("label", "other")).strip().lower()
-    try: conf = float(data.get("conf", 0.0))
-    except Exception: conf = 0.0
-    if label not in ("lucky","other"): label = "other"
-    conf = max(0.0, min(1.0, conf))
-    return (label, conf)
+
+    # Fallback v1
+    for model in _models():
+        url = f"{API_BASES[1]}/models/{model}:generateContent"
+        try:
+            resp = await asyncio.to_thread(_post, url, _lp_payload(img, hints), timeout, key, False)
+            if resp.status_code in (400,404):
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            text = _extract_text(data) or json.dumps(data)[:400]
+            obj = json.loads(text)
+            return (str(obj.get("label","other")), float(obj.get("confidence", 0.0)))
+        except Exception:
+            pass
+
+    return "other", 0.0
+
+# ---------- Phish Image (new) ----------
+def _phish_prompt(hints: str = "") -> str:
+    base = (
+        "Task: Detect whether an image is a screenshot/picture of a PHISHING page.\n"
+        "Return ONLY compact JSON: {\"label\":\"phish|benign\",\"confidence\":0..1}\n"
+        "Consider typical phish cues: fake login pages, wallet-connect prompts, 'claim reward' / giveaway pages,\n"
+        "QR login scams, requests for OTP/seed phrases, brand impersonation with suspicious URLs,\n"
+        "security alerts urging immediate action, password reset popups not from original site, etc.\n"
+        "If the image is just a normal chat, meme, game screenshot or benign UI, return 'benign'.\n"
+        "Scoring guideline: clear phishing UX -> 0.85–0.98; likely -> 0.65–0.84; unsure -> 0.30–0.64.\n"
+    )
+    if hints:
+        base += f"Hints: {hints}\n"
+    return base
+
+def _phish_payload(img: bytes, hints: str = "") -> dict:
+    return {
+        "contents": [{
+            "parts":[
+                {"inline_data": {"mime_type": _guess_mime(img), "data": base64.b64encode(img).decode("ascii")}},
+                {"text": _phish_prompt(hints)},
+            ]
+        }],
+        "generationConfig": {"responseMimeType": "application/json"}
+    }
+
+async def classify_phish_image(images: Iterable[bytes], hints: str = "", timeout_ms: int = 12000) -> Tuple[str, float]:
+    key = _get_key()
+    imgs = list(images or [])
+    if not imgs or not key or requests is None:
+        return "benign", 0.0
+    timeout = max(3.0, timeout_ms / 1000.0)
+    img = imgs[0]
+
+    # Try v1beta first
+    for model in _models():
+        url = f"{API_BASES[0]}/models/{model}:generateContent"
+        try:
+            resp = await asyncio.to_thread(_post, url, _phish_payload(img, hints), timeout, key, True)
+            if resp.status_code in (400,404):
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            text = _extract_text(data) or json.dumps(data)[:400]
+            obj = json.loads(text)
+            lab = str(obj.get("label","benign")).lower()
+            conf = float(obj.get("confidence", 0.0))
+            return ("phish" if lab=="phish" else "benign", conf)
+        except Exception:
+            pass
+
+    # Fallback v1
+    for model in _models():
+        url = f"{API_BASES[1]}/models/{model}:generateContent"
+        try:
+            resp = await asyncio.to_thread(_post, url, _phish_payload(img, hints), timeout, key, False)
+            if resp.status_code in (400,404):
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            text = _extract_text(data) or json.dumps(data)[:400]
+            obj = json.loads(text)
+            lab = str(obj.get("label","benign")).lower()
+            conf = float(obj.get("confidence", 0.0))
+            return ("phish" if lab=="phish" else "benign", conf)
+        except Exception:
+            pass
+
+    return "benign", 0.0
