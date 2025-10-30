@@ -1,229 +1,176 @@
+
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import os, re, json, logging, asyncio, random
+import os, re, logging, asyncio, random
 from typing import Iterable, Tuple, List, Optional, Any
-from pathlib import Path
 import discord
 from discord.ext import commands
 
 log = logging.getLogger("nixe.cogs.lucky_pull_auto")
 
-_RUNTIME_JSON_CACHE: dict[str, Any] | None = None
-_PERSONA_CACHE: dict[str, List[str]] | None = None
-
-def _load_runtime_json() -> dict[str, Any]:
-    global _RUNTIME_JSON_CACHE
-    if _RUNTIME_JSON_CACHE is not None:
-        return _RUNTIME_JSON_CACHE
-    here = Path(__file__).resolve()
-    for p in [here.parent.parent / "config" / "runtime_env.json",
-              Path.cwd() / "nixe" / "config" / "runtime_env.json",
-              Path("nixe/config/runtime_env.json")]:
-        try:
-            if p.exists():
-                _RUNTIME_JSON_CACHE = json.loads(p.read_text(encoding="utf-8"))
-                break
-        except Exception:
-            _RUNTIME_JSON_CACHE = {}
-    return _RUNTIME_JSON_CACHE or {}
-
-def _jget(keys: Iterable[str]):
-    envj = _load_runtime_json()
-    for k in keys:
-        if k in envj:
-            return envj[k]
-    return None
-
-def _env_get(*keys: str, default: Optional[str] = None) -> Optional[str]:
-    for k in keys:
-        v = os.getenv(k)
-        if v not in (None, ""):
-            return v
-    vj = _jget(keys)
-    if isinstance(vj, (str, int, float)):
-        return str(vj)
-    if isinstance(vj, (list, tuple)):
-        return ",".join([str(x) for x in vj])
-    return default
-
-def _parse_id_list(s: str | Iterable[str]) -> List[str]:
-    if isinstance(s, (list, tuple, set)):
-        raw = [str(x) for x in s]
-    else:
-        raw = re.split(r"[,\\s;]+", str(s or ""))
-    out = []
-    seen = set()
-    for x in raw:
-        x = x.strip()
-        if x.isdigit() and x not in seen:
-            seen.add(x)
-            out.append(x)
-    return out
-
-def _float_env(*keys: str, default: float = 0.0) -> float:
-    v = _env_get(*keys, default=None)
-    try:
-        return float(v) if v is not None else default
-    except Exception:
-        return default
-
-# -------- Gemini bridge --------
+# ---- Optional bus (for cross-cog cancellation) ----
 try:
-    from nixe.helpers.gemini_bridge import classify_lucky_pull  # async
+    from nixe.shared import bus  # must provide mark_deleted(id) & is_deleted(id)
+except Exception:
+    class _BusStub:
+        @staticmethod
+        def mark_deleted(msg_id: int, ttl: int = 15) -> None:
+            pass
+        @staticmethod
+        def is_deleted(msg_id: int) -> bool:
+            return False
+    bus = _BusStub()
+
+# ---- Optional Gemini bridge ----
+try:
+    from nixe.helpers.gemini_bridge import classify_lucky_pull  # async (images: Iterable[bytes], hints:str, timeout_ms:int) -> (label, conf)
 except Exception as e:
-    log.warning("[lpa] failed to import gemini bridge: %r", e)
-    async def classify_lucky_pull(images: Iterable[bytes], hints: str = "", timeout_ms: int = 10000):
+    log.debug("[lpa] gemini helper not available: %r", e)
+    async def classify_lucky_pull(images: Iterable[bytes], hints: str = "", timeout_ms: int = 10000) -> Tuple[str, float]:
+        # Safe fallback: never claims "lucky"
         return "other", 0.0
 
-# -------- Persona helpers --------
-def _load_yandere_templates() -> dict[str, List[str]]:
-    global _PERSONA_CACHE
-    if _PERSONA_CACHE is not None:
-        return _PERSONA_CACHE  # type: ignore[return-value]
-    path = _env_get("YANDERE_TEMPLATES_PATH", default="nixe/config/personas/yandere.json") or "nixe/config/personas/yandere.json"
+# ---- Helpers ----
+def _env_get(*names: str, default: str | None = None) -> str | None:
+    for n in names:
+        v = os.getenv(n)
+        if v is not None:
+            return v
+    return default
+
+def _float_env(*names: str, default: float = 0.0) -> float:
+    v = _env_get(*names)
     try:
-        p = Path(path)
-        if not p.exists():
-            # default templates (5 per tone)
-            tpl = {
-                "soft": [
-                    "hei {mention}~ itu tempat yang salah ya. simpen hasil gacha-mu di {redir} saja, oke? 💙",
-                    "ehe~ {mention}, mommy simpan dulu ya. lain kali di {redir} ya sayang ✨",
-                    "{mention}… di sini bukan tempat pamer hasil pull. pindah ke {redir} ya ❤️",
-                    "ini lucu sih—tapi salah tempat, {mention}. ayo ke {redir}~",
-                    "sayang {mention}, aku hapus dulu ya. next time drop-nya ke {redir} 💫"
-                ],
-                "agro": [
-                    "oi {mention}. pamer gacha di sini? salah channel. ke {redir} sana.",
-                    "{mention}, baca nama channelnya. bukan buat lucky-pull. pindah ke {redir}.",
-                    "hapus. {mention}, kirim ke {redir} kalau mau pamer.",
-                    "{mention}… mau kuikat di {redir} atau gimana? next time di sana.",
-                    "salah tempat lagi? {mention} ke {redir}. sekarang."
-                ],
-                "sharp": [
-                    "{mention}, pelanggaran channel. konten gacha → {redir}. Pesan dihapus.",
-                    "Notifikasi: unggahanmu dihapus. Gunakan {redir} untuk hasil pull, {mention}.",
-                    "{mention}, compliance check: lucky-pull di {redir}. Ulangi dengan benar.",
-                    "Kebijakan kanal berlaku. {mention} kirim di {redir}. Pesan sebelumnya dihapus.",
-                    "Enforcement aktif. {mention}: arahkan konten gacha ke {redir}."
-                ]
-            }
-            _PERSONA_CACHE = tpl  # type: ignore[assignment]
-            return tpl
-        data = json.loads(p.read_text(encoding="utf-8"))
-        # normalize structure
-        for k in ("soft","agro","sharp"):
-            data.setdefault(k, [])
-            if not isinstance(data[k], list):
-                data[k] = []
-        _PERSONA_CACHE = data  # type: ignore[assignment]
-        return data
-    except Exception as e:
-        log.debug("[lpa] yandere templates load failed: %r", e)
-        _PERSONA_CACHE = {"soft": [], "agro": [], "sharp": []}  # type: ignore[assignment]
-        return _PERSONA_CACHE  # type: ignore[return-value]
+        return float(v) if v is not None else float(default)
+    except Exception:
+        return float(default)
+
+def _parse_id_list(s: str | None) -> List[str]:
+    s = (s or "").replace(";", ",")
+    return [x.strip() for x in s.split(",") if x.strip()]
 
 def _pick_tone() -> str:
-    mode = (_env_get("YANDERE_TONE_MODE", default="auto") or "auto").lower()
-    if mode in ("soft","agro","sharp"):
-        return mode
-    if mode == "random":
-        weights = _jget(["YANDERE_RANDOM_WEIGHTS"]) or {"soft":"0.5","agro":"0.3","sharp":"0.2"}
-        try:
-            ws = [float(weights.get("soft","0.5")), float(weights.get("agro","0.3")), float(weights.get("sharp","0.2"))]
-            return random.choices(["soft","agro","sharp"], weights=ws, k=1)[0]
-        except Exception:
-            return random.choice(["soft","agro","sharp"])
-    # auto == random with bias to soft
-    return random.choices(["soft","agro","sharp"], weights=[0.6,0.25,0.15], k=1)[0]
+    mode = _env_get("YANDERE_TONE_MODE") or "random"
+    if mode != "random":
+        return _env_get("YANDERE_TONE_FIXED") or "soft"
+    weights = {"soft": 0.3, "agro": 0.5, "sharp": 0.3}
+    try:
+        # allow override via JSON-like env
+        for k in list(weights):
+            ev = _env_get(f"YANDERE_WEIGHT_{k.upper()}")
+            if ev is not None:
+                weights[k] = float(ev)
+    except Exception:
+        pass
+    g = random.random() * sum(weights.values())
+    c = 0.0
+    for k, w in weights.items():
+        c += w
+        if g <= c:
+            return k
+    return "soft"
 
-def _format_notice(tone: str, author: discord.User|discord.Member, redirect_id: str) -> str:
-    tpl = _load_yandere_templates().get(tone) or []
-    if not tpl:
-        tpl = ["{mention}, hapus ya. kirim di {redir}."]
-    text = random.choice(tpl)
-    mention = author.mention
-    redir = f"<#{redirect_id}>" if redirect_id else "#lucky-pull"
-    return text.format(mention=mention, redir=redir)
+def _format_notice(tone: str, author: discord.abc.User, redirect_id: str | None) -> str:
+    # Simple persona lines (keep neutral/safe)
+    tag = author.mention if getattr(author, "mention", None) else f"<@{getattr(author, 'id', 'user')}>"
+    dest = f"<#{redirect_id}>" if redirect_id else "channel yang benar"
+    if tone == "agro":
+        return f"{tag} lucky pull di sini dilarang. Pindahkan ke {dest} ya."
+    if tone == "sharp":
+        return f"{tag} ini bukan tempat lucky pull. Silakan pindah ke {dest}."
+    return f"{tag} jangan post lucky pull di sini. Mohon pindah ke {dest} ya."
 
-async def _send_notice(ch: discord.TextChannel, content: str, ttl: int):
+async def _send_notice(ch: discord.abc.Messageable, content: str, ttl: int = 20):
     try:
         msg = await ch.send(content)
-        if ttl > 0:
-            async def _later(m): 
-                try:
-                    await asyncio.sleep(ttl)
-                    await m.delete()
-                except Exception: 
-                    pass
-            asyncio.create_task(_later(msg))
-    except Exception as e:
-        log.debug("[lpa] send notice failed: %r", e)
+        await asyncio.sleep(max(1, int(ttl)))
+        await msg.delete()
+    except Exception:
+        pass
+
+def _is_image_name(name: str) -> bool:
+    n = (name or "").lower()
+    return bool(re.search(r"\.(png|jpe?g|gif|bmp|webp)$", n))
+
+def _sniff(buf: bytes) -> str:
+    b = buf or b""
+    if len(b) >= 12 and b[:4] == b"RIFF" and b[8:12] == b"WEBP": return "image/webp"
+    if b.startswith(b"\x89PNG\r\n\x1a\n"): return "image/png"
+    if b[:2] == b"\xff\xd8": return "image/jpeg"
+    if b[:6] in (b"GIF87a", b"GIF89a"): return "image/gif"
+    if b[:2] == b"BM": return "image/bmp"
+    return "application/octet-stream"
 
 class LuckyPullAuto(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        chs = _env_get("LPA_GUARD_CHANNELS","LUCKYPULL_GUARD_CHANNELS","LPG_GUARD_CHANNELS","GUARD_CHANNELS","LUCKYPULL_CHANNELS","") or ""
+        # Channels & policy
+        chs = _env_get("LPA_GUARD_CHANNELS","LPG_GUARD_CHANNELS","LUCKYPULL_GUARD_CHANNELS","GUARD_CHANNELS","LUCKYPULL_CHANNELS","")
         self.guard_channels: List[str] = _parse_id_list(chs)
-        self.redirect_id: str = _env_get("LPA_REDIRECT_CHANNEL_ID","LUCKYPULL_REDIRECT_CHANNEL_ID","LPG_REDIRECT_CHANNEL_ID","LUCKYPULL_REDIRECT","REDIRECT_CHANNEL_ID","") or ""
-        self.delete_on_guard: bool = bool(int(_env_get("LPA_DELETE_ON_GUARD","LUCKYPULL_DELETE_ON_GUARD","LPG_DELETE_ON_GUARD","1")))
-        self.mention_user: bool = bool(int(_env_get("LPA_MENTION_USER","LUCKYPULL_MENTION_USER","LPG_MENTION_USER","1")))
-        self.strict_on_guard: bool = bool(int(_env_get("LPA_STRICT_ON_GUARD","LUCKYPULL_STRICT_ON_GUARD","LPG_STRICT_ON_GUARD","0")))
-        self.force_delete_test: bool = bool(int(_env_get("LPA_FORCE_DELETE_TEST","LPG_FORCE_DELETE_TEST","0")))
-        self.threshold = _float_env("GEMINI_LUCKY_THRESHOLD","LUCKYPULL_GEMINI_THRESHOLD", default=0.80)
-        self.timeout_ms = int(float(_env_get("LUCKYPULL_GEM_TIMEOUT_MS","LPG_GEM_TIMEOUT_MS","GEMINI_TIMEOUT_MS","20000")))
-        self.hints = _env_get("GEMINI_LUCKY_HINTS","LUCKYPULL_HINTS","") or "blue archive 10-pull results grid NEW!! star icons rainbow/gold beam character tiles"
-        # Yandere notice
-        self.notice_enable: bool = bool(int(_env_get("LPA_NOTICE_ENABLE","LUCKYPULL_NOTICE_ENABLE","1")))
-        self.notice_ttl: int = int(float(_env_get("LPA_NOTICE_TTL","LUCKYPULL_NOTICE_TTL","20")))
-        self.tone_mode: str = (_env_get("YANDERE_TONE_MODE", default="auto") or "auto")
-        log.warning("[lpa:boot] guard=%s redirect=%s del=%s mention=%s thr=%.2f strict=%s test=%s",
-            self.guard_channels, self.redirect_id, self.delete_on_guard, self.mention_user,
-            self.threshold, self.strict_on_guard, self.force_delete_test)
+        self.redirect_id: str = _env_get("LPA_REDIRECT_CHANNEL_ID","LPG_REDIRECT_CHANNEL_ID","LUCKYPULL_REDIRECT_CHANNEL_ID","LUCKYPULL_REDIRECT","REDIRECT_CHANNEL_ID","") or ""
 
-    async def _collect_image(self, message: discord.Message):
-        blobs = []
-        for att in getattr(message, "attachments", []) or []:
-            try:
-                if isinstance(att, discord.Attachment):
-                    b = await att.read()
-                    if b:
-                        blobs.append(b)
-                        break
-            except Exception:
-                pass
-        if blobs:
-            return blobs
-        for emb in getattr(message, "embeds", []) or []:
-            try:
-                url = ""
-                if emb.image and emb.image.url:
-                    url = emb.image.url
-                elif emb.thumbnail and emb.thumbnail.url:
-                    url = emb.thumbnail.url
-                if url.startswith("http"):
-                    try:
-                        import aiohttp
-                        async with aiohttp.ClientSession() as s:
-                            async with s.get(url, timeout=10) as r:
-                                if r.status == 200:
-                                    blobs.append(await r.read())
-                                    break
-                    except Exception:
-                        try:
-                            import requests
-                            import asyncio as _asyncio
-                            data = await _asyncio.to_thread(lambda: requests.get(url, timeout=10).content)
-                            if data:
-                                blobs.append(data)
-                                break
-                        except Exception:
-                            pass
-            except Exception:
-                pass
+        self.delete_on_guard: bool = bool(int(_env_get("LPA_DELETE_ON_GUARD","LUCKYPULL_DELETE_ON_GUARD","LPG_DELETE_ON_GUARD","1") or "1"))
+        self.mention_user: bool = bool(int(_env_get("LPA_MENTION_USER","LUCKYPULL_MENTION_USER","LPG_MENTION_USER","1") or "1"))
+        self.strict_on_guard: bool = bool(int(_env_get("LPA_STRICT_ON_GUARD","LUCKYPULL_STRICT_ON_GUARD","LPG_STRICT_ON_GUARD","0") or "0"))
+        self.force_delete_test: bool = bool(int(_env_get("LPA_FORCE_DELETE_TEST","LPG_FORCE_DELETE_TEST","0") or "0"))
+
+        # Thresholds
+        self.threshold = _float_env("GEMINI_LUCKY_THRESHOLD","LUCKYPULL_GEMINI_THRESHOLD", default=0.80)
+        self.fast_enable = bool(int(_env_get("LPG_FAST_PATH_ENABLE","LPA_FAST_PATH_ENABLE","1") or "1"))
+        self.fast_delete_thr = _float_env("LPG_FAST_DELETE_THRESHOLD","LPA_FAST_DELETE_THRESHOLD", default=max(self.threshold, 0.90))
+
+        # Gemini classify params
+        self.timeout_ms = int(float(_env_get("LUCKYPULL_GEM_TIMEOUT_MS","LPG_GEM_TIMEOUT_MS","GEMINI_TIMEOUT_MS","10000") or "10000"))
+        self.hints = _env_get("GEMINI_LUCKY_HINTS","LUCKYPULL_HINTS","") or "gacha pull results grid star icons rainbow/gold beam"
+
+        # Notice
+        self.notice_enable: bool = bool(int(_env_get("LPA_NOTICE_ENABLE","LUCKYPULL_NOTICE_ENABLE","1") or "1"))
+        self.notice_ttl: int = int(float(_env_get("LPA_NOTICE_TTL","LUCKYPULL_NOTICE_TTL","20") or "20"))
+
+        log.info("[lpa] guard_channels=%s redirect=%s del=%s mention=%s thr=%.2f fast(%s,%.2f)",
+                 self.guard_channels, self.redirect_id, self.delete_on_guard, self.mention_user,
+                 self.threshold, self.fast_enable, self.fast_delete_thr)
+
+    async def _collect_images(self, message: discord.Message) -> List[bytes]:
+        blobs: List[bytes] = []
+
+        # Attachments
+        try:
+            for att in getattr(message, "attachments", []) or []:
+                if getattr(att, "size", 0) <= 0: 
+                    continue
+                if not _is_image_name(getattr(att, "filename", "")):
+                    # still try reading, we will sniff
+                    pass
+                try:
+                    data = await att.read(use_cached=True)
+                    if _sniff(data).startswith("image/"):
+                        blobs.append(data)
+                except Exception:
+                    pass
+                if len(blobs) >= 2:
+                    break
+        except Exception:
+            pass
+
+        # Embeds (thumbnails/images with URL) – best effort via proxy
+        try:
+            for e in getattr(message, "embeds", []) or []:
+                url = None
+                for cand in [getattr(e, "url", None),
+                             getattr(getattr(e, "image", None), "url", None),
+                             getattr(getattr(e, "thumbnail", None), "url", None)]:
+                    if cand: url = cand; break
+                if not url:
+                    continue
+                # Discord doesn't expose raw bytes easily here without http client;
+                # rely on attachments primarily. Skip embed fetch to avoid deps.
+        except Exception:
+            pass
+
         return blobs
 
-    async def _classify(self, blobs):
+    async def _classify(self, blobs: List[bytes]) -> Tuple[str, float]:
         try:
             return await classify_lucky_pull(blobs, hints=self.hints, timeout_ms=self.timeout_ms)
         except Exception as e:
@@ -232,6 +179,7 @@ class LuckyPullAuto(commands.Cog):
 
     @commands.Cog.listener("on_message")
     async def _on_message(self, message: discord.Message):
+        # Basic guards
         try:
             if message.author.bot:
                 return
@@ -246,10 +194,12 @@ class LuckyPullAuto(commands.Cog):
                  len(getattr(message, "attachments", []) or []),
                  len(getattr(message, "embeds", []) or []))
 
-        imgs = await self._collect_image(message)
+        # Collect
+        imgs = await self._collect_images(message)
         if not imgs:
             return
 
+        # Strict/test shortcut
         if self.force_delete_test or self.strict_on_guard:
             label, conf = "lucky", 1.0
             log.warning("[lpa] TEST/STRICT fallback => lucky=1.0")
@@ -258,14 +208,26 @@ class LuckyPullAuto(commands.Cog):
 
         log.info("[lpa] classify: result=(%s, %.3f) thr=%.2f", label, conf, self.threshold)
 
+        # Fast path
+        if self.fast_enable and label == "lucky" and conf >= self.fast_delete_thr and self.delete_on_guard:
+            try:
+                await message.delete()
+                bus.mark_deleted(message.id)
+                log.info("[lpa] fast-deleted a message in %s (reason=lucky pull)", message.channel.id)
+            except Exception as e:
+                log.warning("[lpa] fast-delete failed: %r", e)
+            return
+
+        # Normal path
         if label == "lucky" and conf >= self.threshold and self.delete_on_guard:
             try:
                 await message.delete()
+                bus.mark_deleted(message.id)
                 log.info("[lpa] deleted a message in %s (reason=lucky pull)", message.channel.id)
             except Exception as e:
                 log.warning("[lpa] delete failed: %r", e)
 
-            # Yandere notice
+            # Notice
             try:
                 if self.notice_enable and isinstance(message.channel, discord.TextChannel):
                     tone = _pick_tone()

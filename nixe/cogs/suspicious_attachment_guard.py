@@ -5,6 +5,7 @@ import os, re, asyncio, logging, urllib.parse
 from typing import Tuple, Optional, List
 import discord
 from discord.ext import commands
+from nixe.shared import bus
 
 log = logging.getLogger("nixe.cogs.suspicious_attachment_guard")  # tag: [sus-attach]
 
@@ -152,6 +153,14 @@ class SuspiciousAttachmentGuard(commands.Cog):
         self.gem_hints = os.getenv("SUS_ATTACH_GEMINI_HINTS", "login page, connect wallet, claim reward, OTP request, QR login, suspicious URL, brand impersonation, seed phrase")
 
         self.always_gem = bool(int(os.getenv("SUS_ATTACH_ALWAYS_GEM", "1")))
+        # Optional: skip scanning on lucky-guard channels (let LPA take precedence)
+        self.skip_lpg_guard = bool(int(os.getenv("SUS_ATTACH_SKIP_LPG_GUARD", "1")))
+        _lpg = (os.getenv("LPG_GUARD_CHANNELS", "") or os.getenv("LUCKYPULL_GUARD_CHANNELS", "")).replace(";",",")
+        try:
+            self.lpg_guard_channels = {s.strip() for s in (_lpg.split(",") if _lpg else [])} - {""}
+        except Exception:
+            self.lpg_guard_channels = set()
+
         self.content_scan = bool(int(os.getenv("SUS_ATTACH_CONTENT_SCAN_ENABLE", "1")))
         self.ignore_channels = set((os.getenv("SUS_ATTACH_IGNORE_CHANNELS","") or "").replace(";",",").split(",")) - {""}
         log.warning("[sus-attach] enable=%s thr=%s gem=%s/%.2f always=%s content=%s ignore=%s",
@@ -178,10 +187,20 @@ class SuspiciousAttachmentGuard(commands.Cog):
 
     @commands.Cog.listener("on_message")
     async def _on_message(self, message: discord.Message):
+        # Fast cancel if already handled by LPA
+        try:
+            if bus.is_deleted(message.id):
+                log.info("[sus-attach] cancel: handled by LPA msg=%s", message.id)
+                return
+        except Exception:
+            pass
         try:
             if not self.enable: return
             if message.author.bot: return
             if self.ignore_channels and str(message.channel.id) in self.ignore_channels: return
+            # Optional skip: let LPA own these channels
+            if self.skip_lpg_guard and self.lpg_guard_channels and str(message.channel.id) in self.lpg_guard_channels:
+                return
         except Exception:
             return
 
@@ -219,6 +238,13 @@ class SuspiciousAttachmentGuard(commands.Cog):
                     if label == "phish" and conf >= self.gem_thr:
                         total_score = max(total_score, self.delete_threshold)
                         reasons.append(f"gemini-phish@{conf:.2f}")
+                        try:
+                            if bool(int(os.getenv("BAN_ON_FIRST_PHISH","0"))):
+                                if isinstance(message.author, discord.Member):
+                                    await message.author.ban(reason=os.getenv("BAN_REASON","Phishing detected (auto)"))
+                                    log.warning("[sus-attach] banned user %s for phishing (conf=%.2f)", message.author, conf)
+                        except Exception as e:
+                            log.warning("[sus-attach] ban failed: %r", e)
                 except Exception as e:
                     log.warning("[sus-attach] gem error: %r", e)
             else:
