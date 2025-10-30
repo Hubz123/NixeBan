@@ -1,76 +1,236 @@
+
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import logging, time
-from typing import List, Tuple, Dict
-from urllib.parse import urlparse
+import os, re, asyncio, logging, urllib.parse
+from typing import Tuple, Optional, List
 import discord
-from discord.ext import commands, tasks
-from nixe.helpers.env_reader import get as _cfg_get, get_int as _cfg_int, get_bool01 as _cfg_bool01
-log = logging.getLogger(__name__)
-_DEFAULT_HOSTS = {"cdn.discordapp.com","media.discordapp.net","images-ext-2.discordapp.net","discord.com","discordapp.com","tenor.com","i.imgur.com","imgur.com"}
-_DEFAULT_EXTS = {"png","jpg","jpeg","gif","webp"}
-class SuspiciousAttachmentGuard(commands.Cog):
-    def __init__(self, bot):
-        self.bot=bot
-        self.enabled = _cfg_bool01("SUS_ATTACH_ENABLE","1")=="1"
-        self.delete_threshold = max(2, _cfg_int("SUS_ATTACH_DELETE_THRESHOLD", 3))
-        self.window_s = max(120, _cfg_int("SUS_ATTACH_WINDOW_S", 600))
-        self.head_timeout = max(500, _cfg_int("SUS_ATTACH_HEAD_TIMEOUT_MS", 2000))/1000.0
-        self.autoban = _cfg_bool01("SUS_ATTACH_AUTOBAN_ENABLE","0")=="1"
-        self.autoban_score = max(4, _cfg_int("SUS_ATTACH_AUTOBAN_SCORE", 5))
-        hosts = _cfg_get("SUS_ATTACH_ALLOWED_HOSTS", ",".join(sorted(_DEFAULT_HOSTS))).split(",")
-        self.allowed_hosts = {h.strip().lower() for h in hosts if h.strip()}
-        exts = _cfg_get("SUS_ATTACH_ALLOWED_EXTS", ",".join(sorted(_DEFAULT_EXTS))).split(",")
-        self.allowed_exts = {e.strip(".").lower() for e in exts if e.strip()}
-        self._score: Dict[int, List[Tuple[float,int]]] = {}
-        if self.enabled: self._gc.start()
-    def cog_unload(self):
-        try: self._gc.cancel()
-        except Exception: pass
-    @tasks.loop(seconds=90)
-    async def _gc(self):
-        now=time.time(); cut=now-self.window_s
-        for uid, arr in list(self._score.items()):
-            self._score[uid]=[(t,s) for (t,s) in arr if t>=cut]
-            if not self._score[uid]: self._score.pop(uid,None)
-    async def _score_url(self, url: str) -> int:
-        sc=0
+from discord.ext import commands
+
+log = logging.getLogger("nixe.cogs.suspicious_attachment_guard")  # tag: [sus-attach]
+
+_IMG_EXT = {".png",".jpg",".jpeg",".gif",".bmp",".webp",".jfif",".pjpeg",".pjp",".tif",".tiff"}
+_ARCHIVE_EXT = {".zip",".rar",".7z",".tar",".gz",".xz"}
+_EXEC_LIKE = {".exe",".scr",".bat",".cmd",".msi",".js",".vbs",".ps1",".lnk"}
+
+_SUS_WORDS = [
+    r"nitro", r"discord\.gift", r"gift", r"airdrop", r"giveaway", r"free", r"bonus",
+    r"steam.*gift", r"robux", r"verification", r"verify.*account", r"2fa", r"otp",
+    r"wallet", r"metamask", r"seed\s*phrase", r"pass\s*phrase", r"private\s*key",
+    r"connect\s*wallet", r"claim\s*reward", r"login", r"signin", r"web3", r"binance",
+    r"trust[\s-]*wallet", r"exchange", r"promo", r"limited", r"urgent", r"appeal", r"suspend",
+    r"xn--", r"0auth", r"0tp", r"0rg", r"discorcl", r"disc0rd", r"stean", r"steaṁ"
+]
+_SUS_RE = re.compile(r"(?i)(" + r"|".join(_SUS_WORDS) + r")")
+
+def _ext(name: str) -> str:
+    n = (name or "").lower().strip()
+    m = re.search(r"(\.[a-z0-9]{1,5})$", n)
+    return m.group(1) if m else ""
+
+def _has_double_ext(name: str) -> bool:
+    n = (name or "").lower()
+    return bool(re.search(r"\.(?:png|jpe?g|gif|bmp|webp|pdf)\.(?:exe|scr|bat|cmd|js|vbs|ps1|lnk)$", n))
+
+def _sniff(buf: bytes) -> str:
+    b = buf or b""
+    if len(b) >= 12 and b[:4] == b"RIFF" and b[8:12] == b"WEBP": return "image/webp"
+    if b.startswith(b"\x89PNG\r\n\x1a\n"): return "image/png"
+    if b[:2] == b"\xff\xd8": return "image/jpeg"
+    if b[:6] in (b"GIF87a", b"GIF89a"): return "image/gif"
+    if b[:2] == b"BM": return "image/bmp"
+    if len(b) >= 12 and b[4:8] == b"ftyp": return "video/mp4"
+    if b[:4] == b"%PDF": return "application/pdf"
+    if b[:4] == b"PK\x03\x04": return "application/zip"
+    if b[:6] == b"7z\xbc\xaf\x27\x1c": return "application/x-7z-compressed"
+    if b[:4] == b"Rar!": return "application/x-rar-compressed"
+    return "application/octet-stream"
+
+async def _download(url: str, limit: int = 5_000_000) -> Optional[bytes]:
+    if not url or not url.startswith("http"): return None
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as s:
+            async with s.get(url, timeout=10) as r:
+                if r.status == 200:
+                    b = await r.read()
+                    return b[:limit]
+    except Exception:
         try:
-            from aiohttp import ClientSession
-            u=urlparse(url); host=(u.hostname or "").lower(); ext=(u.path.rsplit(".",1)[-1].lower() if "." in u.path else "")
-            if host not in self.allowed_hosts: sc+=2
-            if ext and ext not in self.allowed_exts: sc+=2
-            async with ClientSession() as s:
-                try:
-                    async with s.head(url, timeout=self.head_timeout, allow_redirects=True) as r:
-                        c = r.headers.get("Content-Type","").lower()
-                        if r.status>=400: sc+=1
-                        if "image/" not in c: sc+=2
-                except Exception: sc+=1
+            import requests, asyncio as _asyncio
+            b = await _asyncio.to_thread(lambda: requests.get(url, timeout=10).content)
+            return b[:limit]
         except Exception:
-            sc+=1
-        return sc
-    async def _check(self, msg: discord.Message):
-        if not self.enabled or msg.author.bot: return
-        urls=[]
-        urls+= [a.url for a in msg.attachments]
-        for e in msg.embeds:
-            if e.url: urls.append(e.url)
-            if e.image and getattr(e.image, "url", None): urls.append(e.image.url)
-        if not urls: return
-        tot=0
-        for u in urls[:4]:
-            tot+= await self._score_url(u)
-            if tot>=self.delete_threshold: break
-        if tot>=self.delete_threshold:
-            try: await msg.delete(reason=f"suspicious attachment (score={tot})")
-            except discord.Forbidden: log.warning("[sus-attach] missing Manage Messages in #%s", getattr(msg.channel,'name','?'))
-            except Exception as e: log.warning("[sus-attach] delete failed: %r", e)
-            # score is kept in memory window
-    @commands.Cog.listener()
-    async def on_message(self, msg: discord.Message):
-        try: await self._check(msg)
-        except Exception as e: log.warning("[sus-attach] err: %r", e)
-async def setup(bot): 
-    try: await bot.add_cog(SuspiciousAttachmentGuard(bot)); log.info("[sus-attach] loaded")
-    except Exception as e: log.error("[sus-attach] setup failed: %r", e)
+            return None
+    return None
+
+def _text_ratio(buf: bytes) -> float:
+    if not buf: return 0.0
+    total = min(len(buf), 20000)
+    sample = buf[:total]
+    letters = sum(ch in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789" for ch in sample)
+    return letters / float(total or 1)
+
+def _score_attachment(name: str, buf: bytes) -> Tuple[int, str, str]:
+    score = 0
+    reason = []
+    ext = _ext(name)
+    mime = _sniff(buf)
+
+    if _has_double_ext(name):
+        score += 3; reason.append("double-ext")
+
+    if ext in _IMG_EXT and mime not in ("image/png","image/jpeg","image/gif","image/webp","image/bmp"):
+        score += 2; reason.append(f"ext-image/mime-{mime}")
+
+    if ext in _ARCHIVE_EXT and mime not in ("application/zip","application/x-7z-compressed","application/x-rar-compressed"):
+        score += 1; reason.append(f"archive-mime-mismatch:{mime}")
+
+    if ext in _EXEC_LIKE:
+        score += 3; reason.append("exec-like-ext")
+
+    if ext == ".png" and mime == "image/webp":
+        score += 1; reason.append("png-as-webp")
+
+    if ext in _IMG_EXT and mime == "application/octet-stream":
+        score += 2; reason.append("image-ext/octet-stream")
+
+    if len(buf or b"") <= 200:
+        score += 1; reason.append("tiny-bytes")
+    if mime.startswith("image/") and _text_ratio(buf) > 0.35:
+        score += 1; reason.append("text-heavy-image")
+
+    return score, ",".join(reason) or "ok", mime
+
+def _host(url: str) -> str:
+    try:
+        return urllib.parse.urlparse(url).netloc.lower()
+    except Exception:
+        return ""
+
+def _content_signals(message: discord.Message) -> Tuple[int,str]:
+    score = 0
+    reasons = []
+    try:
+        content = (message.content or "").lower()
+        if content and _SUS_RE.search(content):
+            score += 1; reasons.append("sus-words")
+    except Exception:
+        pass
+    try:
+        for e in getattr(message, "embeds", []) or []:
+            for u in [getattr(e, "url", None), getattr(getattr(e, "image", None), "url", None),
+                      getattr(getattr(e, "thumbnail", None), "url", None)]:
+                if not u: continue
+                h = _host(u)
+                if "discord.com" in h or "discordapp.com" in h: continue
+                if "tenor.co" in h or "tenor.com" in h or "media.tenor.com" in h: continue
+                if "giphy.com" in h or "gyazo.com" in h or "imgur.com" in h: continue
+                if "xn--" in h or re.search(r"(disc0rd|dlscord|stea[mrn]|0auth|0tp)", h):
+                    score += 2; reasons.append(f"sus-host:{h}")
+    except Exception:
+        pass
+    return score, ",".join(reasons) or "ok"
+
+try:
+    from nixe.helpers.gemini_bridge import classify_phish_image  # async
+except Exception as e:
+    log.debug("[sus-attach] gemini helper not available: %r", e)
+    async def classify_phish_image(images, hints: str = "", timeout_ms: int = 10000):
+        return "benign", 0.0
+
+class SuspiciousAttachmentGuard(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.enable = bool(int(os.getenv("SUSPICIOUS_ATTACHMENT_ENABLE", os.getenv("SUS_ATTACH_HARDENER_ENABLE", os.getenv("SUS_ATTACH_ENABLE", "1")))))
+        self.delete_threshold = int(os.getenv("SUS_ATTACH_DELETE_THRESHOLD", "3"))
+        self.max_bytes = int(os.getenv("SUS_ATTACH_MAX_BYTES", "5000000"))
+        self.verbose = bool(int(os.getenv("SUS_ATTACH_LOG_VERBOSE", "1")))
+
+        self.gem_enable = bool(int(os.getenv("SUS_ATTACH_GEMINI_ENABLE", "1")))
+        self.gem_thr = float(os.getenv("SUS_ATTACH_GEMINI_THRESHOLD", "0.85"))
+        self.gem_timeout = int(os.getenv("SUS_ATTACH_GEM_TIMEOUT_MS", os.getenv("PHISH_GEMINI_MAX_LATENCY_MS", "12000")))
+        self.gem_hints = os.getenv("SUS_ATTACH_GEMINI_HINTS", "login page, connect wallet, claim reward, OTP request, QR login, suspicious URL, brand impersonation, seed phrase")
+
+        self.always_gem = bool(int(os.getenv("SUS_ATTACH_ALWAYS_GEM", "1")))
+        self.content_scan = bool(int(os.getenv("SUS_ATTACH_CONTENT_SCAN_ENABLE", "1")))
+        self.ignore_channels = set((os.getenv("SUS_ATTACH_IGNORE_CHANNELS","") or "").replace(";",",").split(",")) - {""}
+        log.warning("[sus-attach] enable=%s thr=%s gem=%s/%.2f always=%s content=%s ignore=%s",
+                    self.enable, self.delete_threshold, self.gem_enable, self.gem_thr, self.always_gem, self.content_scan, sorted(self.ignore_channels))
+
+    async def _collect_images(self, message: discord.Message) -> List[bytes]:
+        blobs: List[bytes] = []
+        for att in getattr(message, "attachments", []) or []:
+            try:
+                if isinstance(att, discord.Attachment) and (att.filename or "").lower().endswith(tuple(_IMG_EXT)):
+                    b = await att.read()
+                    if b: blobs.append(b)
+            except Exception: pass
+        for emb in getattr(message, "embeds", []) or []:
+            try:
+                url = ""
+                if emb.image and emb.image.url: url = emb.image.url
+                elif emb.thumbnail and emb.thumbnail.url: url = emb.thumbnail.url
+                if url.startswith("http"):
+                    b = await _download(url, self.max_bytes)
+                    if b: blobs.append(b)
+            except Exception: pass
+        return blobs[:2]
+
+    @commands.Cog.listener("on_message")
+    async def _on_message(self, message: discord.Message):
+        try:
+            if not self.enable: return
+            if message.author.bot: return
+            if self.ignore_channels and str(message.channel.id) in self.ignore_channels: return
+        except Exception:
+            return
+
+        total_score = 0
+        reasons = []
+        if self.content_scan:
+            sc, rs = _content_signals(message)
+            total_score += sc
+            if sc: reasons.append(rs)
+            if self.verbose:
+                log.info("[sus-attach] content-score=%s reasons=%s", sc, rs)
+
+        for att in getattr(message, "attachments", []) or []:
+            try:
+                if not isinstance(att, discord.Attachment): continue
+                name = att.filename or ""
+                b = await att.read()
+                sc, rs, mime = _score_attachment(name, b or b"")
+                total_score += sc
+                if sc: reasons.append(f"{name}:{rs}")
+                if self.verbose:
+                    log.info("[sus-attach] score=%s mime=%s name=%s", sc, mime, name)
+            except Exception as e:
+                log.debug("[sus-attach] att err: %r", e)
+
+        try_gem = self.gem_enable and (total_score < self.delete_threshold or self.always_gem)
+
+        if try_gem:
+            imgs = await self._collect_images(message)
+            if imgs:
+                log.info("[sus-attach] gem try: imgs=%d thr=%.2f timeout=%dms", len(imgs), self.gem_thr, self.gem_timeout)
+                try:
+                    label, conf = await classify_phish_image(imgs, hints=self.gem_hints, timeout_ms=self.gem_timeout)
+                    log.info("[sus-attach] gem classify: (%s, %.3f) thr=%.2f", label, conf, self.gem_thr)
+                    if label == "phish" and conf >= self.gem_thr:
+                        total_score = max(total_score, self.delete_threshold)
+                        reasons.append(f"gemini-phish@{conf:.2f}")
+                except Exception as e:
+                    log.warning("[sus-attach] gem error: %r", e)
+            else:
+                log.info("[sus-attach] gem skip: no images collected")
+
+        if total_score >= self.delete_threshold:
+            try:
+                await message.delete()
+                log.warning("[sus-attach] deleted in %s (score=%s reasons=%s)", message.channel.id, total_score, ";".join(reasons))
+            except Exception as e:
+                log.warning("[sus-attach] delete failed: %r", e)
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(SuspiciousAttachmentGuard(bot))
+    log.info("[sus-attach] loaded")
