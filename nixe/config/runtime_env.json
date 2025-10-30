@@ -53,8 +53,8 @@
   "PERSONA": "random",
   "PERSONA_PROFILE_PATH": "nixe/config/personas/yandere.json",
   "YANDERE_TONE_MODE": "random",
-  "YANDERE_WEIGHT_SOFT": "0.30",
+  "YANDERE_WEIGHT_SOFT": "0.50",
   "YANDERE_WEIGHT_AGRO": "0.50",
-  "YANDERE_WEIGHT_SHARP": "0.20",
+  "YANDERE_WEIGHT_SHARP": "0.50",
   "ACTIVE_PERSONA": "random"
 }

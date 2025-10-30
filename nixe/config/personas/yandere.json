@@ -1,23 +1,38 @@
 {
   "soft": [
-    "hei {mention}~ itu tempat yang salah ya. simpen hasil gacha-mu di {redir} saja, oke? 💙",
-    "ehe~ {mention}, mommy simpan dulu ya. lain kali di {redir} ya sayang ✨",
-    "{mention}… di sini bukan tempat pamer hasil pull. pindah ke {redir} ya ❤️",
-    "ini lucu sih—tapi salah tempat, {mention}. ayo ke {redir}~",
-    "sayang {mention}, aku hapus dulu ya. next time drop-nya ke {redir} 💫"
-  ],
+  "hei {user}~ salah kamar nih. taruhnya di {channel} ya, please 💙",
+  "hihi {user}, ini aku simpan dulu ya. next time ke {channel} ya sayang ✨",
+  "{user}, lucu banget—tapi pindah ke {channel} dulu ya ❤️",
+  "psst {user}… pamer yang ini di {channel} aja ya~",
+  "sayang {user}, biar rapi, drop-nya di {channel} ya 💫",
+  "eh {user}, ke {channel} dulu yuk. di sini bukan tempat gacha~",
+  "{user}, kasih lihatnya di {channel} ya. makasih manis 🫶",
+  "maaf ya {user}, mommy hapus dulu. terus pindah ke {channel} ya 🌸",
+  "ayo {user}, kita jaga channel ini. pamer di {channel} ya ✨",
+  "{user}, ikut aturan ya. upload ulang di {channel} 🤍",
+  "ganteng/cantik {user}, di {channel} bakal lebih pas kok~",
+  "thanks {user}~ lanjutkan di {channel} ya, biar rapi 💖"
+],
   "agro": [
-    "oi {mention}. pamer gacha di sini? salah channel. ke {redir} sana.",
-    "{mention}, baca nama channelnya. bukan buat lucky-pull. pindah ke {redir}.",
-    "hapus. {mention}, kirim ke {redir} kalau mau pamer.",
-    "{mention}… mau kuikat di {redir} atau gimana? next time di sana.",
-    "salah tempat lagi? {mention} ke {redir}. sekarang."
+  "oi {user}. pamer gacha di sini? salah channel. ke {channel} sana.",
+  "{user}, baca nama channelnya. bukan buat lucky-pull. pindah ke {channel}.",
+  "hapus. {user}, kirim ke {channel} kalau mau pamer.",
+  "{user}… mau kuikat di {channel} atau gimana? next time di sana.",
+  "salah tempat lagi? {user} ke {channel}. sekarang.",
+  "{user}, stop spam. pindahkan ke {channel}.",
+  "jelas-jelas bukan tempatnya. {user}, ke {channel}.",
+  "{user}, aturan server jelas. gacha → {channel}. pindah."
   ],
   "sharp": [
-    "{mention}, pelanggaran channel. konten gacha → {redir}. Pesan dihapus.",
-    "Notifikasi: unggahanmu dihapus. Gunakan {redir} untuk hasil pull, {mention}.",
-    "{mention}, compliance check: lucky-pull di {redir}. Ulangi dengan benar.",
-    "Kebijakan kanal berlaku. {mention} kirim di {redir}. Pesan sebelumnya dihapus.",
-    "Enforcement aktif. {mention}: arahkan konten gacha ke {redir}."
+  "{user}, nurut. Pindah ke {channel}. Sekarang.",
+  "{user}, aku yang tentukan tempatmu. Ke {channel}.",
+  "{user}, jangan uji sabarku. {channel}.",
+  "{user}, diam. Pindahkan ke {channel}.",
+  "{user}, patuhi aku. {channel}.",
+  "{user}, jangan bikin aku mengulang. {channel}.",
+  "{user}, jangan cari perhatian di sini. {channel}.",
+  "{user}, taati aturanku. {channel}.",
+  "{user}, cukup. {channel}.",
+  "{user}, tetap di tempat yang KUKATAKAN: {channel}."
   ]
 }
