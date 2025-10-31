@@ -1,13 +1,18 @@
-
 # -*- coding: utf-8 -*-
 """
 Channel Directory / List Command (robust resolver)
-- Supports COMPACT mode & BUTTONS default from JSON file (top-level) and per-section override.
+- COMPACT mode & BUTTONS default can be defined at JSON top-level, with per-section overrides.
 - Falls back to ENV if JSON not provided.
+- Natural triggers: "nixe @channel list", "nixe channel list"
+- Command: !channel list | !channel diag
+ENV keys used (optional):
+  CHANNEL_DIR_JSON_PATH, CHANNEL_DIR_ADD_LINK_BUTTONS, CHANNEL_DIR_SHOW_IDS,
+  CHANNEL_DIR_TITLE, CHANNEL_DIR_COLOR, CHANNEL_DIR_FOOTER, CHANNEL_DIR_THUMB,
+  CHANNEL_DIR_AUTO_DELETE_SEC, CHANNEL_DIR_PING_ON_HELP, CHANNEL_DIR_COMPACT,
+  CHANNEL_DIR_ITEMS_JSON
 """
-
 import os, json, re, logging, asyncio, pathlib
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Optional, Dict, Any
 import discord
 from discord.ext import commands
 
@@ -153,27 +158,23 @@ def _build_view_buttons(guild: Optional[discord.Guild], items: list, limit: int 
             pass
     return view if cnt > 0 else None
 
-def _build_embeds_and_views(cfg: Dict[str, Any], guild: Optional[discord.Guild]) -> list[tuple[discord.Embed, Optional[discord.ui.View]]]:
+def _build_embeds_and_views(cfg: Dict[str, Any], guild: Optional[discord.Guild]):
     title  = cfg.get("title")  or _get("CHANNEL_DIR_TITLE",  default="📌 Direktori Channel & Thread")
     color  = _color_int(str(cfg.get("color")  or _get("CHANNEL_DIR_COLOR",  default="#60a5fa")))
     thumb_cfg  = cfg.get("thumbnail") or _get("CHANNEL_DIR_THUMB")
     footer = cfg.get("footer") or _get("CHANNEL_DIR_FOOTER", default="Gunakan channel sesuai fungsinya ya ✨")
     show_ids = bool(int(_get("CHANNEL_DIR_SHOW_IDS", default="0") or "0"))
-    # NEW: allow default compact/buttons from JSON top-level
     json_compact = cfg.get("compact")
     json_buttons = cfg.get("buttons")
     compact_default = bool(int(str(json_compact)) if json_compact is not None else int(_get("CHANNEL_DIR_COMPACT", default="0") or "0"))
     buttons_default = None if json_buttons is None else bool(int(str(json_buttons)))
-    # helper to compute per-section buttons
-    def _section_buttons(sec_buttons: Optional[int]) -> bool:
-        # if section sets it, use that; else fall back to JSON default if present; else ENV
+    def _section_buttons(sec_buttons: int | None) -> bool:
         if sec_buttons is not None:
             try: return bool(int(str(sec_buttons)))
             except Exception: return True
         if buttons_default is not None:
             return buttons_default
         return bool(int(_get("CHANNEL_DIR_ADD_LINK_BUTTONS", default="1") or "1"))
-
     def _emb(title_local: str) -> discord.Embed:
         e = discord.Embed(title=title_local, color=color)
         if thumb_cfg:
@@ -186,7 +187,6 @@ def _build_embeds_and_views(cfg: Dict[str, Any], guild: Optional[discord.Guild])
                 pass
         if footer: e.set_footer(text=footer)
         return e
-
     out = []
     sections = cfg.get("sections")
     if isinstance(sections, list) and sections:
@@ -207,17 +207,14 @@ def _build_embeds_and_views(cfg: Dict[str, Any], guild: Optional[discord.Guild])
                 resolved_name = _resolve_name(guild, cid_i) if name_tpl == "{channel}" else name_tpl
                 mention = f"<#{cid}>"
                 desc = str(it.get("desc") or "")
-
                 if compact_mode:
                     field_name = "\u200B"
                     field_value = mention if not desc else f"{mention}\n{desc}"
                 else:
                     field_name = resolved_name
                     field_value = mention if not desc else f"{mention}\n{desc}"
-
                 if show_ids:
                     field_value = f"{field_value}\n`{cid}`"
-
                 e.add_field(name=field_name, value=field_value, inline=False)
                 items_for_view.append({"id": cid})
                 count += 1
@@ -238,17 +235,14 @@ def _build_embeds_and_views(cfg: Dict[str, Any], guild: Optional[discord.Guild])
             resolved_name = _resolve_name(guild, cid_i) if name_tpl == "{channel}" else name_tpl
             mention = f"<#{cid}>"
             desc = str(it.get("desc") or "")
-
             if compact_default:
                 field_name = "\u200B"
                 field_value = mention if not desc else f"{mention}\n{desc}"
             else:
                 field_name = resolved_name
                 field_value = mention if not desc else f"{mention}\n{desc}"
-
             if show_ids:
                 field_value = f"{field_value}\n`{cid}`"
-
             e.add_field(name=field_name, value=field_value, inline=False)
             items_for_view.append({"id": cid})
             count += 1
@@ -266,7 +260,6 @@ class ChannelDirectory(commands.Cog):
         self.bot = bot
         self._auto_delete = int(_get("CHANNEL_DIR_AUTO_DELETE_SEC", default="0") or "0")
         self._ping_on_help = bool(int(_get("CHANNEL_DIR_PING_ON_HELP", default="0") or "0"))
-
     async def _send_embeds(self, destination: discord.abc.Messageable, author: Optional[discord.abc.User] = None):
         cfg = _load_cfg()
         guild = getattr(destination, "guild", None)
@@ -280,11 +273,11 @@ class ChannelDirectory(commands.Cog):
                 else:
                     await destination.send(embed=em, view=view)
             if self._auto_delete > 0 and first_msg:
+                import asyncio
                 await asyncio.sleep(self._auto_delete)
                 await first_msg.delete()
         except Exception as e:
             log.warning("[chan-dir] failed to send embed: %r", e)
-
     @commands.command(name="channel")
     async def channel_group(self, ctx: commands.Context, sub: str = None):
         sub = (sub or "").lower()
@@ -301,7 +294,6 @@ class ChannelDirectory(commands.Cog):
                 detail = f"flat items={items}"
             compact_default = cfg.get("compact")
             await ctx.send(f"[chan-dir] origin: `{origin}` • {detail} • compact={compact_default!r}")
-
     @commands.Cog.listener("on_message")
     async def _on_message(self, message: discord.Message):
         try:
@@ -311,6 +303,5 @@ class ChannelDirectory(commands.Cog):
                 await self._send_embeds(message.channel, message.author)
         except Exception as e:
             log.debug("[chan-dir] on_message fail: %r", e)
-
 async def setup(bot: commands.Bot):
     await bot.add_cog(ChannelDirectory(bot))

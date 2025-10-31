@@ -1,1 +1,2 @@
-# make nixe a package
+# nixe/__init__.py
+__all__ = []

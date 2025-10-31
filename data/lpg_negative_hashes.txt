@@ -1,0 +1,10 @@
+# Negative hash whitelist for Lucky Pull (UI/Save screens, etc.)
+# You can add more lines in format:
+#   ahash:<16-hex>
+#   dhash:<16-hex>
+#   sha256:<64-hex>
+# Lines starting with '#' are ignored.
+ahash:7f79213131276773
+dhash:98b3d7c3e7c4c787
+sha256:8f5ddbc3cd581621d3310421966527dfbd3a7e61d7d963c9b36a4e2eaf97c94f
+label: reverse1999-save-data-ui

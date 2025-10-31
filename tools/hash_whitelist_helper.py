@@ -1,5 +1,8 @@
-# nixe/helpers/hash_utils.py
-import io, hashlib
+# tools/hash_whitelist_helper.py
+# Usage:
+#   python tools/hash_whitelist_helper.py path/to/image.png
+# Prints ahash, dhash and sha256 for the image.
+import sys, hashlib, io
 from PIL import Image
 import numpy as np
 
@@ -35,6 +38,15 @@ def dhash_hex_from_bytes(b: bytes) -> str:
         out.append(format(v, "x"))
     return "".join(out)
 
-def sha256_hex(b: bytes) -> str:
-    import hashlib
-    return hashlib.sha256(b).hexdigest()
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: python tools/hash_whitelist_helper.py <image>")
+        sys.exit(1)
+    p = sys.argv[1]
+    b = open(p, "rb").read()
+    print("ahash:", ahash_hex_from_bytes(b, 8))
+    print("dhash:", dhash_hex_from_bytes(b))
+    print("sha256:", hashlib.sha256(b).hexdigest())
+
+if __name__ == "__main__":
+    main()

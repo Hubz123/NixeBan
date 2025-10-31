@@ -1,0 +1,25 @@
+# PARTIAL: hot-reload for negative-hash list
+# Add inside LuckyPullGuard.__init__ after neglist load:
+self._neg_file_path = os.getenv("LPG_NEG_FILE") or self.cfg.get("LPG_NEG_FILE") or "data/lpg_negative_hashes.txt"
+try:
+    import os, time
+    self._neg_file_mtime = os.path.getmtime(self._neg_file_path) if os.path.exists(self._neg_file_path) else 0.0
+except Exception:
+    self._neg_file_mtime = 0.0
+
+def _reload_neg_if_changed(self):
+    try:
+        import os
+        mt = os.path.getmtime(self._neg_file_path) if os.path.exists(self._neg_file_path) else 0.0
+        if mt > getattr(self, "_neg_file_mtime", 0.0):
+            self._neg_file_mtime = mt
+            ah, dh, sh, thr = _neglist(self.cfg)
+            self._neg_ahash = set([x.lower() for x in ah])
+            self._neg_dhash = set([x.lower() for x in dh])
+            self._neg_sha   = set([x.lower() for x in sh])
+            self._neg_thr   = float(thr)
+            log.warning("[lpg] reloaded negative-whitelist: ah=%d dh=%d sha=%d thr=%.2f",
+                        len(self._neg_ahash), len(self._neg_dhash), len(self._neg_sha), self._neg_thr)
+    except Exception:
+        pass
+# Call self._reload_neg_if_changed() at the start of _classify(...)
