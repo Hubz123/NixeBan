@@ -1,14 +1,7 @@
 # nixe/cogs/a16_lpg_persona_react_overlay.py
 import os, logging, re, random, asyncio
 from discord.ext import commands
-
-YANDERE_LINES = [
-    "Ketahuan ya~? Simpan gacha-mu di tempat yang benar atau... *aku* yang akan menyimpannya ❤️",
-    "Lucky pull detected. Hush... di sini bukan tempatnya. Pergi sekarang sebelum aku *marah*~",
-    "Hehe, keberuntunganmu manis. Tapi bukan di sini. Pindah sana, sebelum pedangku ikut bicara ✂️",
-    "Awww, flex ya? Di channel terlarang? Geminiku bilang itu **lucky pull**. *Hapus* 😘",
-    "Aku jagain server ini. Pamer boleh—**di channel yang benar**. Kali ini kubereskan dulu~"
-]
+from nixe.helpers.persona_loader import pick_line
 
 def _env_bool(name: str, default=False) -> bool:
     v = os.getenv(name)
@@ -17,13 +10,15 @@ def _env_bool(name: str, default=False) -> bool:
     return str(v).strip().lower() in ("1","true","yes","on","y")
 
 class LPGPersonaReact(commands.Cog):
-    """Emit persona lines when a lucky-pull deletion is logged by guards (LPA/legacy)."""
-    PAT = re.compile(r"deleted a message in\s+(\d+).*\b(reason=)?lucky", re.I)
+    """Emit YANDERE persona line from JSON when a lucky-pull deletion is logged by guards (LPA/legacy)."""
+    PAT = re.compile(r"deleted a message in\s+(\d+).*(?:\b(reason=)?lucky)", re.I)
 
     def __init__(self, bot):
         self.bot = bot
         self.log = logging.getLogger(__name__)
         self.enabled = _env_bool("LPG_PERSONA_ENABLE", True)
+        self.persona_name = os.getenv("LPG_PERSONA_NAME", "yandere")
+        self.mode = os.getenv("LPG_PERSONA_MODE", "random")
         self._install_handler()
 
     def _install_handler(self):
@@ -34,7 +29,7 @@ class LPGPersonaReact(commands.Cog):
         handler = logging.Handler()
         handler.emit = self._on_log_emit
         parent.addHandler(handler)
-        self.log.warning("[lpg-persona] persona react active (listening logs)")
+        self.log.warning("[lpg-persona] persona react active (JSON source: %s, mode=%s)", self.persona_name, self.mode)
 
     def _on_log_emit(self, record: logging.LogRecord):
         try:
@@ -44,9 +39,8 @@ class LPGPersonaReact(commands.Cog):
         m = self.PAT.search(msg)
         if not m:
             return
-        chan_id_str = m.group(1)
         try:
-            chan_id = int(chan_id_str)
+            chan_id = int(m.group(1))
         except Exception:
             return
         # schedule send line
@@ -63,7 +57,11 @@ class LPGPersonaReact(commands.Cog):
         if not ch:
             return
         try:
-            line = random.choice(YANDERE_LINES)
+            # Always source from JSON
+            line = pick_line(self.persona_name, mode=self.mode, user="kamu", channel=f"<#{chan_id}>", reason="lucky pull")
+            if not line:
+                self.log.warning("[lpg-persona] persona JSON empty or missing groups for %s", self.persona_name)
+                return
             await ch.send(line)
         except Exception as e:
             self.log.info(f"[lpg-persona] send failed: {e}")
