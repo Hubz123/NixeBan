@@ -1,12 +1,10 @@
 {
   "NIXE_ALLOW_JSON_SECRETS": "1",
-
   "--- LOGGING & CORE ---": "---------------------------------------",
   "LOG_LEVEL": "DEBUG",
   "LOG_CHANNEL_ID": "1431178130155896882",
   "NIXE_PHISH_LOG_CHAN_ID": "1431178130155896882",
   "PHISH_LOG_CHAN_ID": "1431178130155896882",
-
   "--- P-HASH DB / BOARD ---": "------------------------------------",
   "PHASH_DB_PARENT_CHANNEL_ID": "1431178130155896882",
   "PHASH_DB_THREAD_ID": "1431192568221270108",
@@ -16,14 +14,12 @@
   "PHASH_RESCANNER_ENABLE": "1",
   "PHASH_AUTORESEED_ENABLE": "1",
   "PHASH_RESEED_BACKFILL_HOURS": "720",
-
   "--- P-HASH MATCHING ---": "-------------------------------------",
   "PHASH_MATCH_DELETE_THRESHOLD": "0.92",
   "PHASH_AUTOBAN_THRESHOLD": "0.96",
   "PHASH_MATCH_DELETE_MAX_BITS": "12",
   "PHASH_MATCH_LOG_TOPK": "6",
   "PHASH_MATCH_DEBUG": "1",
-
   "--- FIRST TOUCHDOWN / PROTECT ---": "------------------------------",
   "FIRST_TOUCHDOWN_ENABLE": "1",
   "FIRST_TOUCHDOWN_BAN_ON_PHASH": "1",
@@ -31,9 +27,8 @@
   "PROTECT_CHANNEL_IDS": "1409949797313679492,1431192568221270108",
   "FIRST_TOUCHDOWN_BYPASS_CHANNELS": "1409949797313679492,1431192568221270108",
   "PHASH_MATCH_SKIP_CHANNELS": "1409949797313679492,1431192568221270108",
-
   "--- LUCKY PULL GUARD (alias LPG*) ---": "------------------------",
-  "LPG_GUARD_CHANNELS": "1293199776824692766,886534544688308265,1429669041156526182,1429675223761948853",
+  "LPG_GUARD_CHANNELS": "886534544688308265,1293199776824692766,1429669041156526182,1429675223761948853",
   "LPG_REDIRECT_CHANNEL_ID": "1293200121063936052",
   "LPG_FAST_PATH_ENABLE": "1",
   "LPG_FAST_DELETE_THRESHOLD": "0.90",
@@ -49,28 +44,25 @@
   "LPG_GEM_RETRY_ON_429": "1",
   "LPG_GEM_CACHE_TTL_SEC": "600",
   "LPG_ONLY_IF_HEUR_SCORE_GE": "0.50",
-
   "--- LUCKY PULL GUARD (compat LUCKYPULL_*) ---": "--------------",
-  "LUCKYPULL_GUARD_CHANNELS": "1293199776824692766,886534544688308265,1429669041156526182,1429675223761948853",  // NEW
-  "LUCKYPULL_REDIRECT_CHANNEL_ID": "1293200121063936052",                                                                   // NEW
-  "LUCKYPULL_DELETE_ON_GUARD": "1",                                                                                         // NEW
-  "LUCKYPULL_MENTION_USER": "1",                                                                                            // NEW
-  "LUCKYPULL_NOTICE_TTL": "18",                                                                                             // NEW
-  "LUCKYPULL_STRICT_ON_GUARD": "1",                                                                                         // NEW
-
+  "LUCKYPULL_GUARD_CHANNELS": "886534544688308265,1293199776824692766,1429669041156526182,1429675223761948853",
+  "LUCKYPULL_REDIRECT_CHANNEL_ID": "1293200121063936052",
+  "LUCKYPULL_DELETE_ON_GUARD": "1",
+  "LUCKYPULL_MENTION_USER": "1",
+  "LUCKYPULL_NOTICE_TTL": "18",
+  "LUCKYPULL_STRICT_ON_GUARD": "1",
   "--- LPG NEGATIVE WHITELIST (thread & file) ---": "----------------",
-  "LPG_NEG_PARENT_CHANNEL_ID": "1431178130155896882",                                                                        // NEW
-  "LPG_NEG_THREAD_NAME": "Whitelist LPG (FP)",                                                                               // NEW
-  "LPG_NEG_THREAD_ID": "",                                                                                                   // NEW (optional; biarkan kosong agar auto-create)
-  "LPG_NEG_FILE": "data/lpg_negative_hashes.txt",                                                                            // NEW
-  "LPG_NEG_MATCH": "0.93",                                                                                                   // NEW
-  "LPG_NEG_TOUCH_FILE": "data/lpg_neg_reload.touch",                                                                         // NEW
-  "LPG_NEG_AHASHES": "",                                                                                                     // NEW (opsional: list CSV)
-  "LPG_NEG_DHASHES": "",                                                                                                     // NEW
-  "LPG_NEG_SHA256": "",                                                                                                      // NEW
-  "LPG_NEG_PHASHES": "",                                                                                                     // (lama, biarkan untuk backward-compat)
-  "LPG_NEG_MATCH_THRESHOLD": "0.93",                                                                                         // (lama, biarkan untuk backward-compat)
-
+  "LPG_NEG_PARENT_CHANNEL_ID": "1431178130155896882",
+  "LPG_NEG_THREAD_NAME": "Whitelist LPG (FP)",
+  "LPG_NEG_THREAD_ID": "",
+  "LPG_NEG_FILE": "data/lpg_negative_hashes.txt",
+  "LPG_NEG_MATCH": "0.93",
+  "LPG_NEG_TOUCH_FILE": "data/lpg_neg_reload.touch",
+  "LPG_NEG_AHASHES": "",
+  "LPG_NEG_DHASHES": "",
+  "LPG_NEG_SHA256": "",
+  "LPG_NEG_PHASHES": "",
+  "LPG_NEG_MATCH_THRESHOLD": "0.93",
   "--- SUS ATTACH / PHISH (NO GEMINI) ---": "-----------------------",
   "SUS_ATTACH_ENABLE": "1",
   "SUS_ATTACH_DELETE_THRESHOLD": "3",
@@ -99,7 +91,6 @@
   "SUS_ATTACH_PHISH_REGEX": "(?i)(?:\\bcrypto\\s*casino\\b|\\bpromo\\s*code\\b|\\bbonus\\b|\\bwithdrawal\\s*success\\b|\\$\\s*2500)\\b",
   "BAN_ON_FIRST_PHISH": "1",
   "BAN_REASON": "Phishing detected (auto)",
-
   "--- PERSONA / YANDERE ---": "------------------------------------",
   "PERSONA_MODE": "random",
   "PERSONA_ACTIVE": "random",
@@ -113,7 +104,6 @@
   "YANDERE_WEIGHT_AGRO": "0.50",
   "YANDERE_WEIGHT_SHARP": "0.50",
   "ACTIVE_PERSONA": "random",
-
   "--- CHANNEL DIRECTORY ---": "------------------------------------",
   "CHANNEL_DIR_JSON_PATH": "nixe/config/channel_directory.json",
   "CHANNEL_DIR_ADD_LINK_BUTTONS": "0",
@@ -124,13 +114,11 @@
   "CHANNEL_DIR_FOOTER": "Pilih kanal yang sesuai, thread khusus di bawah.",
   "CHANNEL_DIR_AUTO_DELETE_SEC": "10",
   "CHANNEL_DIR_PING_ON_HELP": "0",
-
   "--- MIRROR / HOUSEKEEPING ---": "-------------------------------",
   "MIRROR_BEFORE_DELETE": "1",
   "MIRROR_DEST_ID": "1409949797313679492",
   "MIRROR_MAX_BYTES": "6000000",
   "MIRROR_CHANNELS": "",
-
   "--- SCHEDULER / HOUSEKEEPING ---": "-----------------------------",
   "PHASH_HOURLY_EVERY_SEC": "300",
   "PHASH_HOURLY_LOG_WHEN_ZERO": "0"

@@ -1,18 +1,19 @@
 # scripts/smoke_all_nixe.py
 """
 NixeBot — SMOKE ALL (channels + whitelist + configs + files)
-v3:
-- Prints PASS/WARN/FAIL lines
-- Strict mode FAILs if any list differs from its sanitized Suggest (order/dupes/format)
-- --print-pass (default true) to show PASS lines
-- Robust JSON loader (//, /* */, trailing commas)
+v4:
+- In --strict, list "diff" (order/format mismatch vs Suggest) => FAIL
+- --fix-inplace / --fix-to <path> : rewrite list keys to sanitized Suggest CSV
+- PASS/WARN/FAIL printed; relaxed JSON loader
 
 Usage:
   python scripts/smoke_all_nixe.py [path/to/runtime_env.json]
-  [--write-sanitized out.json] [--json out_report.json] [--strict] [--no-print-pass]
+    [--strict] [--no-print-pass]
+    [--write-sanitized out.json] [--json out_report.json]
+    [--fix-inplace] [--fix-to fixed.json]
 """
 from __future__ import annotations
-import os, sys, json, re, time
+import os, sys, json, re
 
 # ---------- helpers: relaxed json loader ----------
 
@@ -120,14 +121,14 @@ class Report:
     def PASS(self, msg): self._log("PASS", msg)
     def WARN(self, msg): self._log("WARN", msg)
     def FAIL(self, msg): self._log("FAIL", msg)
-    def dump(self): 
+    def dump(self):
         if self.logs: print("\n".join(self.logs))
     def exit_code(self, strict=False):
         if self.fail_cnt>0: return 2
         if strict and self.warn_cnt>0: return 2
         return 0 if self.warn_cnt==0 else 1
 
-def run(env_path: str, strict=False, print_pass=True):
+def run(env_path: str, strict=False, print_pass=True, do_fix_inplace=False, fix_to_path=None):
     rep=Report(print_pass=print_pass)
     env=load_env_relaxed(env_path)
     root=os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -149,24 +150,26 @@ def run(env_path: str, strict=False, print_pass=True):
 
     # List keys
     print("== List channel keys ==")
-    parsed={}
+    parsed={}; suggest_map={}; any_strict_fail=False
     for k in LIST_KEYS:
         raw_csv = env.get(k,"")
         vals = parse_list(raw_csv)
         uniq, dups, flagged = sanitize_list(vals)
         parsed[k]=set(uniq)
         suggest_csv=",".join(uniq) if uniq else ""
+        suggest_map[k]=suggest_csv
         diff = (suggest_csv != ",".join(vals))
-        status = "PASS" if (not dups and not flagged and not (strict and diff)) else ("WARN" if (not dups and not flagged) else "FAIL")
-        if status=="PASS": rep.PASS(f"{k}: count={len(vals)} uniq={len(uniq)}")
-        elif status=="WARN": rep.WARN(f"{k}: count={len(vals)} uniq={len(uniq)} dups={len(dups)} flagged={len(flagged)}")
-        else: rep.FAIL(f"{k}: count={len(vals)} uniq={len(uniq)} dups={len(dups)} flagged={len(flagged)} (diff={diff})")
-        if dups: print(f"  - Duplicates: {dups}")
-        if flagged:
-            print("  - Flagged tokens:")
-            for orig, fl in flagged:
-                probs=[n for n,b in fl.items() if b]
-                print(f"    • {orig} -> {','.join(probs) if probs else 'invalid'}")
+        # Decide status
+        if dups or flagged:
+            rep.FAIL(f"{k}: count={len(vals)} uniq={len(uniq)} dups={len(dups)} flagged={len(flagged)}")
+        elif strict and diff:
+            any_strict_fail=True
+            rep.FAIL(f"{k}: order/format differs from Suggest (diff=True)")
+        else:
+            if diff:
+                rep.WARN(f"{k}: order/format differs (non-strict)")
+            else:
+                rep.PASS(f"{k}: OK")
         print(f"  - Suggest: {suggest_csv if suggest_csv else '(empty)'}")
     print()
 
@@ -240,6 +243,16 @@ def run(env_path: str, strict=False, print_pass=True):
         else: rep.WARN(f"missing: {p}")
     print()
 
+    # Optional fix
+    if do_fix_inplace or fix_to_path:
+        fixed = load_env_relaxed(env_path)
+        for k in LIST_KEYS:
+            fixed[k] = suggest_map.get(k, "")
+        target = env_path if do_fix_inplace else fix_to_path
+        with open(target, "w", encoding="utf-8") as f:
+            json.dump(fixed, f, ensure_ascii=False, indent=2)
+        print(f"[WRITE] fixed lists -> {target}")
+
     # Summary
     rep.dump()
     print("\n== SUMMARY ==")
@@ -249,7 +262,7 @@ def run(env_path: str, strict=False, print_pass=True):
 def main(argv):
     strict="--strict" in argv
     print_pass = not ("--no-print-pass" in argv)
-    json_out=None; target=None
+    json_out=None; target=None; do_fix_inplace="--fix-inplace" in argv
     if "--json" in argv:
         i=argv.index("--json")
         if i+1<len(argv): json_out=argv[i+1]
@@ -257,9 +270,14 @@ def main(argv):
         i=argv.index("--write-sanitized")
         if i+1<len(argv): target=argv[i+1]
         else: print("[FAIL] --write-sanitized requires path"); sys.exit(2)
+    fix_to_path=None
+    if "--fix-to" in argv:
+        i=argv.index("--fix-to")
+        if i+1<len(argv): fix_to_path = argv[i+1]
+        else: print("[FAIL] --fix-to requires path"); sys.exit(2)
 
     env_path=find_env_path(argv)
-    rep=run(env_path, strict=strict, print_pass=print_pass)
+    rep=run(env_path, strict=strict, print_pass=print_pass, do_fix_inplace=do_fix_inplace, fix_to_path=fix_to_path)
     if target:
         raw=open(env_path,"r",encoding="utf-8").read()
         txt=strip_json_comments(raw); txt=remove_trailing_commas(txt)
