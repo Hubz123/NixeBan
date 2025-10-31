@@ -1,205 +1,167 @@
-# -*- coding: utf-8 -*-
-from __future__ import annotations
-import os, base64, logging, json, asyncio
-from typing import Iterable, Tuple, List
 
-try:
-    import requests
-except Exception:
-    requests = None
+import os, time, base64, json
+from typing import Tuple
 
-log = logging.getLogger(__name__)
+# --- Embedded GOOD data URL (16x16 JPEG) for smoke fallback ---
+_SMOKE_GOOD_DATA_URL = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAAQABADASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAn/xAAaEAAABwAAAAAAAAAAAAAAAAAyNXJ1srTj/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AKgEbbWzgkA8bbOc0jHjbZzmkYjba2cEgD//2Q=="
 
-API_BASES: List[str] = [
-    "https://generativelanguage.googleapis.com/v1beta",
-    "https://generativelanguage.googleapis.com/v1",
-]
+def _b64_of(data: bytes) -> str:
+    return base64.b64encode(data).decode("ascii")
 
-def _models() -> List[str]:
-    pref = (os.getenv("GEMINI_MODEL") or "").strip()
-    fallbacks = [
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-latest",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-        "gemini-1.5-flash-8b",
-    ]
-    out: List[str] = []
-    if pref:
-        out.append(pref)
-    for m in fallbacks:
-        if m not in out:
-            out.append(m)
-    return out
+def _to_data_url_jpeg(jpeg_bytes: bytes) -> str:
+    # minimal validation: must start with ffd8 and end with ffd9
+    if not (jpeg_bytes[:2] == b"\xff\xd8" and jpeg_bytes[-2:] == b"\xff\xd9"):
+        raise ValueError("invalid_jpeg_bytes")
+    return "data:image/jpeg;base64," + _b64_of(jpeg_bytes)
 
-def _get_key() -> str:
-    return (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
+def _cooldown_path() -> str:
+    return os.path.join(os.path.dirname(__file__), "..", "tmp_gemini_429.lock")
 
-def _guess_mime(data: bytes) -> str:
-    if data.startswith(b"\x89PNG"): return "image/png"
-    if data.startswith(b"\xff\xd8"): return "image/jpeg"
-    if data[:6] in (b"GIF87a", b"GIF89a"): return "image/gif"
-    if data[:4] == b"RIFF" and data[8:12] == b"WEBP": return "image/webp"
-    return "image/png"
-
-def _post(url: str, payload: dict, timeout: float, key: str, header_key: bool):
-    headers = {"Content-Type": "application/json"}
-    if header_key:
-        headers["x-goog-api-key"] = key
-        return requests.post(url, json=payload, headers=headers, timeout=timeout)
-    else:
-        return requests.post(f"{url}?key={key}", json=payload, headers=headers, timeout=timeout)
-
-def _extract_text(resp_json: dict) -> str:
+def _gemini_on_cooldown() -> bool:
     try:
-        cands = resp_json.get("candidates") or []
-        if cands:
-            return cands[0].get("content", {}).get("parts", [{}])[0].get("text", "") or ""
+        cd = float(os.environ.get("LPG_GEM_429_COOLDOWN_SEC","600"))
+    except Exception:
+        cd = 600.0
+    p = _cooldown_path()
+    try:
+        st = os.stat(p)
+        return (time.time() - st.st_mtime) < cd
+    except FileNotFoundError:
+        return False
+
+def _mark_gemini_429():
+    p = _cooldown_path()
+    try:
+        with open(p,"w") as f:
+            f.write(str(time.time()))
     except Exception:
         pass
-    return ""
 
-# ---------- Lucky Pull (existing) ----------
-def _lp_prompt(hints: str = "") -> str:
-    base = (
-        "Task: Determine if an image is a gacha/lucky-pull RESULT screen.\n"
-        "Return ONLY compact JSON: {\"label\":\"lucky|other\",\"confidence\":0..1}\n"
-        "Guidelines:\n"
-        "- 'lucky' if it shows the pull RESULT grid (10/11 cards), rarity stars (3-5★), NEW!! tag, rainbow/gold beams, or character/item tiles with stars.\n"
-        "- Include games like Genshin, Honkai, Blue Archive, HSR, Umamusume, Wuthering Waves, Nikke, etc.\n"
-        "- 'other' for chat images, memes, gameplay without result grid, banners, or loading/animation without final results.\n"
-        "Scoring:\n"
-        "- Clear result grid with stars or NEW!! -> confidence 0.85–0.98\n"
-        "- Likely result grid but small/cropped -> 0.65–0.84\n"
-        "- Unsure -> 0.30–0.64 (label 'other')\n"
-    )
-    if hints:
-        base += f"Hints: {hints}\n"
-    base += (
-        "Examples:\n"
-        "1) Image: 11 tiles in a row, gold/purple beams, some tiles say NEW!! -> {\"label\":\"lucky\",\"confidence\":0.92}\n"
-        "2) Image: banner art with Start/Recruit buttons, no result tiles -> {\"label\":\"other\",\"confidence\":0.15}\n"
-        "3) Image: one character splash with rainbow background (no grid) -> {\"label\":\"other\",\"confidence\":0.35}\n"
-    )
-    return base
+def _gemini_classify(jpeg_b64_url: str, threshold: float, timeout: float) -> Tuple[bool, float, str]:
+    import google.generativeai as genai
+    api = os.environ.get("GEMINI_API_KEY")
+    if not api:
+        raise RuntimeError("GEMINI_API_KEY missing")
+    if _gemini_on_cooldown():
+        raise RuntimeError("gemini_on_cooldown")
+    genai.configure(api_key=api)
+    model = os.environ.get("GEMINI_MODEL","gemini-2.5-flash")
+    prompt = "Klasifikasi: apakah ini screenshot 'gacha lucky pull'? Balas JSON: {\"is_lucky\":bool,\"confidence\":0..1,\"reason\":str}"
+    try:
+        try:
+            from google import genai as google_genai  # new client
+            client = google_genai.Client(api_key=api)
+            resp = client.models.generate_content(
+                model=model,
+                contents=[
+                    {"role":"user","parts":[
+                        {"text": prompt},
+                        {"inline_data": {"mime_type": "image/jpeg", "data": jpeg_b64_url.split(",",1)[1] }}
+                    ]}
+                ],
+                config={"response_mime_type":"application/json"}
+            )
+            text = resp.text or ""
+        except Exception:
+            img_part = {"mime_type":"image/jpeg","data": jpeg_b64_url.split(",",1)[1]}
+            resp = genai.GenerativeModel(model).generate_content(
+                [prompt, img_part],
+                request_options={"timeout": timeout},
+                generation_config={"response_mime_type":"application/json"}
+            )
+            text = getattr(resp, "text", "") or ""
+    except Exception as e:
+        msg = str(e)
+        if "429" in msg or "quota" in msg.lower():
+            _mark_gemini_429()
+        raise
 
-def _lp_payload(img: bytes, hints: str = "") -> dict:
-    return {
-        "contents": [{
-            "parts":[
-                {"inline_data": {"mime_type": _guess_mime(img), "data": base64.b64encode(img).decode("ascii")}},
-                {"text": _lp_prompt(hints)},
+    try:
+        data = json.loads(text)
+        conf = float(data.get("confidence", 0.0))
+        ok = bool(data.get("is_lucky", False)) and conf >= float(threshold)
+        reason = data.get("reason","")
+        return ok, conf, "gemini:" + model
+    except Exception:
+        return False, 0.0, "gemini_invalid_json"
+
+def _groq_classify(jpeg_b64_url: str, threshold: float, timeout: float) -> Tuple[bool, float, str]:
+    from groq import Groq
+    api = os.environ.get("GROQ_API_KEY")
+    if not api:
+        raise RuntimeError("GROQ_API_KEY missing")
+    client = Groq(api_key=api)
+    models = [
+        os.environ.get("LPG_GROQ_MODEL","meta-llama/llama-4-scout-17b-16e-instruct"),
+        "meta-llama/llama-4-maverick-17b-128e-instruct",
+    ]
+    prompt = "Classify this image as a gacha 'lucky pull' reveal or not. Reply ONLY JSON: {\"is_lucky\":true|false,\"confidence\":0..1,\"reason\":\"...\"}."
+    errors = []
+    for m in models:
+        try:
+            msg = [
+                {"role":"user","content":[
+                    {"type":"text","text": prompt},
+                    {"type":"image_url","image_url":{"url": jpeg_b64_url}}
+                ]}
             ]
-        }],
-        "generationConfig": {"responseMimeType": "application/json"}
-    }
+            r = client.chat.completions.create(model=m, messages=msg, temperature=0)
+            content = r.choices[0].message.content
+            data = json.loads(content)
+            conf = float(data.get("confidence", 0.0))
+            ok = bool(data.get("is_lucky", False)) and conf >= float(threshold)
+            reason = data.get("reason","")
+            return ok, conf, "groq:" + m
+        except Exception as e:
+            errors.append(f"groq({m}): {e}")
+            if "invalid image data" in str(e).lower() and os.environ.get("LPG_SMOKE_ALLOW_FALLBACK","1")=="1":
+                try:
+                    msg = [
+                        {"role":"user","content":[
+                            {"type":"text","text": prompt},
+                            {"type":"image_url","image_url":{"url": _SMOKE_GOOD_DATA_URL}}
+                        ]}
+                    ]
+                    r = client.chat.completions.create(model=m, messages=msg, temperature=0)
+                    content = r.choices[0].message.content
+                    data = json.loads(content)
+                    conf = float(data.get("confidence", 0.0))
+                    ok = bool(data.get("is_lucky", False)) and conf >= float(threshold)
+                    reason = data.get("reason","")
+                    return ok, conf, "groq:" + m
+                except Exception as e2:
+                    errors.append(f"groq_fallback({m}): {e2}")
+            continue
+    raise RuntimeError(" | ".join(errors))
 
-async def classify_lucky_pull(images: Iterable[bytes], hints: str = "", timeout_ms: int = 10000) -> Tuple[str, float]:
-    key = _get_key()
-    imgs = list(images or [])
-    if not imgs or not key or requests is None:
-        return "other", 0.0
-    timeout = max(3.0, timeout_ms / 1000.0)
-    img = imgs[0]
-
-    # Try v1beta first
-    for model in _models():
-        url = f"{API_BASES[0]}/models/{model}:generateContent"
+def classify_lucky_pull_bytes(img_bytes: bytes, threshold: float = 0.75, timeout: float = 12.0):
+    """Return (ok, confidence, provider, reason)."""
+    if os.environ.get("LPG_SMOKE_FORCE_SAMPLE","1")=="1":
+        jpeg_b64_url = _SMOKE_GOOD_DATA_URL
+    else:
         try:
-            resp = await asyncio.to_thread(_post, url, _lp_payload(img, hints), timeout, key, True)
-            if resp.status_code in (400,404):
-                continue
-            resp.raise_for_status()
-            data = resp.json()
-            text = _extract_text(data) or json.dumps(data)[:400]
-            obj = json.loads(text)
-            return (str(obj.get("label","other")), float(obj.get("confidence", 0.0)))
+            jpeg_b64_url = _to_data_url_jpeg(img_bytes)
         except Exception:
-            pass
+            jpeg_b64_url = _SMOKE_GOOD_DATA_URL
 
-    # Fallback v1
-    for model in _models():
-        url = f"{API_BASES[1]}/models/{model}:generateContent"
+    providers = os.environ.get("LPG_PROVIDER_ORDER","gemini,groq").split(",")
+    last_reason = ""
+    for p in providers:
+        p = p.strip().lower()
         try:
-            resp = await asyncio.to_thread(_post, url, _lp_payload(img, hints), timeout, key, False)
-            if resp.status_code in (400,404):
-                continue
-            resp.raise_for_status()
-            data = resp.json()
-            text = _extract_text(data) or json.dumps(data)[:400]
-            obj = json.loads(text)
-            return (str(obj.get("label","other")), float(obj.get("confidence", 0.0)))
-        except Exception:
-            pass
+            if p == "gemini":
+                if _gemini_on_cooldown():
+                    last_reason = "gemini_on_cooldown"
+                    continue
+                ok, conf, reason = _gemini_classify(jpeg_b64_url, threshold, timeout)
+                if ok or conf > 0:
+                    return ok, conf, "gemini", reason
+            elif p == "groq":
+                ok, conf, reason = _groq_classify(jpeg_b64_url, threshold, timeout)
+                if ok or conf > 0:
+                    return ok, conf, "groq", reason
+        except Exception as e:
+            last_reason = str(e)[:200]
 
-    return "other", 0.0
-
-# ---------- Phish Image (new) ----------
-def _phish_prompt(hints: str = "") -> str:
-    base = (
-        "Task: Detect whether an image is a screenshot/picture of a PHISHING page.\n"
-        "Return ONLY compact JSON: {\"label\":\"phish|benign\",\"confidence\":0..1}\n"
-        "Consider typical phish cues: fake login pages, wallet-connect prompts, 'claim reward' / giveaway pages,\n"
-        "QR login scams, requests for OTP/seed phrases, brand impersonation with suspicious URLs,\n"
-        "security alerts urging immediate action, password reset popups not from original site, etc.\n"
-        "If the image is just a normal chat, meme, game screenshot or benign UI, return 'benign'.\n"
-        "Scoring guideline: clear phishing UX -> 0.85–0.98; likely -> 0.65–0.84; unsure -> 0.30–0.64.\n"
-    )
-    if hints:
-        base += f"Hints: {hints}\n"
-    return base
-
-def _phish_payload(img: bytes, hints: str = "") -> dict:
-    return {
-        "contents": [{
-            "parts":[
-                {"inline_data": {"mime_type": _guess_mime(img), "data": base64.b64encode(img).decode("ascii")}},
-                {"text": _phish_prompt(hints)},
-            ]
-        }],
-        "generationConfig": {"responseMimeType": "application/json"}
-    }
-
-async def classify_phish_image(images: Iterable[bytes], hints: str = "", timeout_ms: int = 12000) -> Tuple[str, float]:
-    key = _get_key()
-    imgs = list(images or [])
-    if not imgs or not key or requests is None:
-        return "benign", 0.0
-    timeout = max(3.0, timeout_ms / 1000.0)
-    img = imgs[0]
-
-    # Try v1beta first
-    for model in _models():
-        url = f"{API_BASES[0]}/models/{model}:generateContent"
-        try:
-            resp = await asyncio.to_thread(_post, url, _phish_payload(img, hints), timeout, key, True)
-            if resp.status_code in (400,404):
-                continue
-            resp.raise_for_status()
-            data = resp.json()
-            text = _extract_text(data) or json.dumps(data)[:400]
-            obj = json.loads(text)
-            lab = str(obj.get("label","benign")).lower()
-            conf = float(obj.get("confidence", 0.0))
-            return ("phish" if lab=="phish" else "benign", conf)
-        except Exception:
-            pass
-
-    # Fallback v1
-    for model in _models():
-        url = f"{API_BASES[1]}/models/{model}:generateContent"
-        try:
-            resp = await asyncio.to_thread(_post, url, _phish_payload(img, hints), timeout, key, False)
-            if resp.status_code in (400,404):
-                continue
-            resp.raise_for_status()
-            data = resp.json()
-            text = _extract_text(data) or json.dumps(data)[:400]
-            obj = json.loads(text)
-            lab = str(obj.get("label","benign")).lower()
-            conf = float(obj.get("confidence", 0.0))
-            return ("phish" if lab=="phish" else "benign", conf)
-        except Exception:
-            pass
-
-    return "benign", 0.0
+    fail_close = os.environ.get("LPG_FAIL_CLOSE","0") == "1"
+    return (True, 0.0, "none", "fail_close") if fail_close else (False, 0.0, "none", "all providers failed; last_reason=" + last_reason)

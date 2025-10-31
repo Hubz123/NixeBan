@@ -6,5 +6,10 @@
   "LUCKYPULL_HEUR_MODE": "soft",
   "LUCKYPULL_PATTERN": "",
   "LUCKYPULL_GEMINI_ENABLE": "1",
-  "LUCKYPULL_MAX_LATENCY_MS": "800"
+  "LUCKYPULL_MAX_LATENCY_MS": "800",
+  "GEMINI_MODEL": "gemini-2.5-flash-lite",
+  "GROQ_MODEL": "llama-3.1-8b-instant",
+  "GROQ_MODEL_VISION_CANDIDATES": "meta-llama/llama-4-scout-17b-16e-instruct,meta-llama/llama-4-maverick-17b-128e-instruct",
+  "LPG_GEM_429_COOLDOWN_SEC": "600",
+  "LPG_FAIL_CLOSE": "0"
 }
