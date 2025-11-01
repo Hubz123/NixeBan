@@ -1,278 +1,286 @@
-"""Lucky Pull Guard — with Negative Hash Whitelist"""
-from __future__ import annotations
-import asyncio, json, logging, os, random, io, hashlib
-from typing import Tuple, Optional, List
+
+# -*- coding: utf-8 -*-
+import os, io, asyncio, logging
+from typing import Optional
 import discord
 from discord.ext import commands
 
-log = logging.getLogger("nixe.cogs.lucky_pull_guard")
-
-# --- DEBUG booster via env ---
-def _enable_debug_if_requested():
-    try:
-        flag = os.getenv("LPG_DEBUG", os.getenv("NIXE_LPG_VERBOSE", "0"))
-        if str(flag).lower() in ("1","true","yes","y","on"):
-            log.setLevel(logging.DEBUG)
-            logging.getLogger(__name__).setLevel(logging.DEBUG)
-    except Exception:
-        pass
-
-_enable_debug_if_requested()
-
-def _load_runtime_env() -> dict:
-    path = os.getenv("RUNTIME_ENV_PATH") or "nixe/config/runtime_env.json"
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-def _coerce_list(v) -> List[str]:
-    if isinstance(v, list): return [str(x) for x in v]
-    if isinstance(v, str):  return [s.strip() for s in v.split(",") if s.strip()]
-    return []
-
-def _bool(v, default=True) -> bool:
-    if v is None: return default
-    s = str(v).strip().lower()
-    return s in ("1","true","yes","on")
-
-# --- lightweight hashes (no external deps) ---
+# Persona helper
 try:
-    from nixe.helpers.ahash import average_hash_bytes as _ahash_bytes
+    from nixe.helpers.persona_loader import load_persona, pick_line
 except Exception:
-    _ahash_bytes = None
+    load_persona = None
+    pick_line = None
 
-def _ahash_hex(b: bytes) -> Optional[str]:
-    try:
-        if _ahash_bytes:
-            return _ahash_bytes(b, 8)
-        # tiny fallback: same algorithm inline
-        from PIL import Image
-        import numpy as np
-        im = Image.open(io.BytesIO(b)).convert("L").resize((8, 8))
-        arr = np.asarray(im, dtype=np.float32)
-        avg = float(arr.mean())
-        bits = (arr >= avg).astype("uint8").flatten()
-        v=0; out=[]
-        for i,bit in enumerate(bits):
-            v=(v<<1)|int(bit)
-            if i%4==3: out.append(format(v,'x')); v=0
-        if len(bits)%4!=0: out.append(format(v,'x'))
-        return ''.join(out)
-    except Exception:
-        return None
+# Image classifier bridge (respects env like LPG_PROVIDER_ORDER, models, etc)
+try:
+    from nixe.helpers.gemini_bridge import classify_lucky_pull_bytes as classify_bytes
+except Exception:
+    classify_bytes = None
 
-def _dhash_hex(b: bytes) -> Optional[str]:
-    try:
-        from PIL import Image
-        im = Image.open(io.BytesIO(b)).convert("L").resize((9, 8))
-        px = list(im.getdata()); w, h = im.size
-        bits = []
-        for y in range(h):
-            row = [px[y*w+x] for x in range(w)]
-            for x in range(w-1):
-                bits.append(1 if row[x] < row[x+1] else 0)
-        v=0; out=[]
-        for i,bit in enumerate(bits):
-            v=(v<<1)|int(bit)
-            if i%4==3: out.append(format(v,'x')); v=0
-        if len(bits)%4!=0: out.append(format(v,'x'))
-        return ''.join(out)
-    except Exception:
-        return None
+log = logging.getLogger(__name__)
 
-def _hex_to_int(h: str) -> int:
-    try:
-        return int(h.strip().lower().replace("0x",""), 16)
-    except Exception:
-        return -1
+def _env_bool_any(*pairs, default=False):
+    for k, d in pairs:
+        v = os.getenv(k, d)
+        if v is None: 
+            continue
+        if str(v).strip().lower() in ("1","true","yes","on"): 
+            return True
+        if str(v).strip().lower() in ("0","false","no","off"):
+            return False
+    return default
 
-def _hamming_sim_hex(a: str, b: str, bits: int = 64) -> float:
-    try:
-        x = _hex_to_int(a) ^ _hex_to_int(b)
-        # count bits
-        cnt = 0
-        while x:
-            x &= x - 1
-            cnt += 1
-        dist = cnt
-        return max(0.0, 1.0 - dist / float(bits))
-    except Exception:
-        return 0.0
+def _env_str_any(*keys, default=""):
+    for k in keys:
+        v = os.getenv(k, None)
+        if v is not None and str(v).strip() != "":
+            return str(v).strip()
+    return default
 
-def _load_neg_list_from_file(path: str) -> List[tuple[str,str]]:
-    out = []
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                s = line.strip()
-                if not s or s.startswith("#"): continue
-                if ":" in s:
-                    t, v = s.split(":", 1)
-                    t = t.strip().lower(); v = v.strip().lower()
-                    if t in ("ahash","dhash","sha256"):
-                        out.append((t, v))
-    except Exception:
-        pass
+def _env_int_any(*keys, default=0):
+    for k in keys:
+        v = os.getenv(k, None)
+        if v is None: 
+            continue
+        try:
+            return int(str(v).strip())
+        except Exception:
+            continue
+    return default
+
+def _env_float_any(*keys, default=0.0):
+    for k in keys:
+        v = os.getenv(k, None)
+        if v is None: 
+            continue
+        try:
+            return float(str(v).strip())
+        except Exception:
+            continue
+    return default
+
+def _parse_id_list(value: str):
+    out = set()
+    for tok in (value or "").replace(" ", "").split(","):
+        if tok.isdigit(): 
+            out.add(int(tok))
     return out
 
-def _neglist(cfg: dict) -> tuple[list[str], list[str], list[str], float]:
-    ahs = _coerce_list(os.getenv("LPG_NEG_AHASHES") or cfg.get("LPG_NEG_AHASHES"))
-    dhs = _coerce_list(os.getenv("LPG_NEG_DHASHES") or cfg.get("LPG_NEG_DHASHES"))
-    shs = _coerce_list(os.getenv("LPG_NEG_SHA256")  or cfg.get("LPG_NEG_SHA256"))
-    path = os.getenv("LPG_NEG_FILE") or cfg.get("LPG_NEG_FILE") or "data/lpg_negative_hashes.txt"
-    thr = float(os.getenv("LPG_NEG_MATCH", cfg.get("LPG_NEG_MATCH", 0.93)))
-    for t, v in _load_neg_list_from_file(path):
-        if t == "ahash": ahs.append(v)
-        elif t == "dhash": dhs.append(v)
-        elif t == "sha256": shs.append(v)
-    return list(dict.fromkeys(ahs)), list(dict.fromkeys(dhs)), list(dict.fromkeys(shs)), thr
+def _provider_threshold(provider: str):
+    eps = _env_float_any("LPG_CONF_EPSILON", default=0.0)
+    if provider and provider.lower().startswith("gemini"):
+        thr = _env_float_any("GEMINI_LUCKY_THRESHOLD", "LPG_GEMINI_THRESHOLD", default=0.80)
+        return max(0.0, min(1.0, thr - eps))
+    # default groq threshold
+    thr = _env_float_any("LPG_GROQ_THRESHOLD", default=0.50)
+    return max(0.0, min(1.0, thr - eps))
 
-def _match_negative(b: bytes, ah: list[str], dh: list[str], sh: list[str], thr: float) -> bool:
-    try:
-        sha = hashlib.sha256(b).hexdigest()
-        if sha in sh: return True
-    except Exception: pass
-    try:
-        a = _ahash_hex(b)
-        if a:
-            for x in ah:
-                if _hamming_sim_hex(a, x, 64) >= thr: return True
-    except Exception: pass
-    try:
-        d = _dhash_hex(b)
-        if d:
-            for x in dh:
-                if _hamming_sim_hex(d, x, 64) >= thr: return True
-    except Exception: pass
-    return False
+def _mention_enabled():
+    return _env_bool_any(("LPG_MENTION","1"), ("LUCKYPULL_MENTION_USER","1"), default=True)
 
-# --- Gemini/Lucky helper
-class _GemBridge:
-    def __init__(self, cfg: dict):
-        self.enable = _bool(cfg.get("LPG_GEMINI_ENABLE", cfg.get("GEMINI_ENABLE", True)), True)
-        self.timeout_ms = int(cfg.get("LPG_GEM_TIMEOUT_MS", cfg.get("GEMINI_TIMEOUT_MS", 10000)))
-    async def classify_lucky_pull(self, images: List[bytes], hints: str = "", timeout_ms: int = 10000) -> tuple[str, float]:
-        if not self.enable: return ("other", 0.0)
-        try:
-            from nixe.helpers.lp_gemini_helper import classify_lucky_pull as _class
-            return await _class(images, hints=hints, timeout_ms=min(timeout_ms, self.timeout_ms))
-        except Exception:
-            try:
-                from nixe.helpers.gemini_bridge import classify_lucky_pull as _class2
-                return await _class2(images, hints=hints, timeout_ms=min(timeout_ms, self.timeout_ms))
-            except Exception:
-                return ("other", 0.0)
-
-def _load_yandere_persona():
-    base = _load_runtime_env()
-    path = os.getenv("YANDERE_TEMPLATES_PATH") or base.get("YANDERE_TEMPLATES_PATH") or "nixe/config/personas/yandere.json"
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        tones = data.get("groups") or data.get("tones") or {"soft": [], "agro": [], "sharp": []}
-        weights = data.get("weights") or {"soft":0.6,"agro":0.3,"sharp":0.1}
-        return tones, weights
-    except Exception:
-        return ({"soft": ["{mention} ke {redir}"], "agro": ["{mention} ke {redir}."], "sharp": ["{mention} → {redir}"]},
-                {"soft":0.5,"agro":0.3,"sharp":0.2})
-
-def _pick_yandere_line() -> str:
-    base = _load_runtime_env()
-    mode  = (os.getenv("YANDERE_TONE_MODE") or base.get("YANDERE_TONE_MODE") or "auto").strip().lower()
-    fixed = (os.getenv("YANDERE_TONE_FIXED") or base.get("YANDERE_TONE_FIXED") or "soft").strip().lower()
-    tones, weights = _load_yandere_persona()
-    keys = ["soft","agro","sharp"]
-    if mode=="fixed" and fixed in tones and tones[fixed]:
-        tone = fixed
-    else:
-        w = [float((weights or {}).get(k,0)) for k in keys]
-        if sum(w)<=0: w=[1,1,1]
-        tone = random.choices(keys, weights=w, k=1)[0]
-    templs = (tones.get(tone) or tones.get("soft") or ["{mention} ke {redir}"])
-    return random.choice(templs)
+def _provider_order():
+    order = _env_str_any("LPG_PROVIDER_ORDER", "LPG_IMAGE_PROVIDER_ORDER", "LPA_PROVIDER_ORDER", default="gemini,groq")
+    return [p.strip().lower() for p in order.split(",") if p.strip()]
 
 class LuckyPullGuard(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.cfg = _load_runtime_env()
-        self.guard_channels = set(_coerce_list(self.cfg.get("LUCKYPULL_GUARD_CHANNELS")))
-        self.redirect_id = str(self.cfg.get("LUCKYPULL_REDIRECT_CHANNEL_ID") or self.cfg.get("LUCKYPULL_REDIRECT") or "0")
-        self.delete_on_guard = _bool(self.cfg.get("LUCKYPULL_DELETE_ON_GUARD"), True)
-        self.mention_user    = _bool(self.cfg.get("LUCKYPULL_MENTION_USER"), True)
-        self.strict_on_guard = _bool(self.cfg.get("LUCKYPULL_STRICT_ON_GUARD"), True)
-        self.threshold  = float(self.cfg.get("GEMINI_LUCKY_THRESHOLD", 0.87))
-        self.timeout_ms = int(self.cfg.get("LPG_GEM_TIMEOUT_MS", 10000))
-        self.notice_ttl = int(self.cfg.get("LUCKYPULL_NOTICE_TTL", 18))
-        self.gb = _GemBridge(self.cfg)
-        # --- NEW: negative whitelist hashes ---
-        ah, dh, sh, thr = _neglist(self.cfg)
-        self._neg_ahash = set([x.lower() for x in ah])
-        self._neg_dhash = set([x.lower() for x in dh])
-        self._neg_sha   = set([x.lower() for x in sh])
-        self._neg_thr   = float(thr)
-        if self._neg_ahash or self._neg_dhash or self._neg_sha:
-            log.warning("[lpg] negative-whitelist active: ah=%d dh=%d sha=%d thr=%.2f",
-                        len(self._neg_ahash), len(self._neg_dhash), len(self._neg_sha), self._neg_thr)
+        self.enable = _env_bool_any(("LPG_ENABLE","1"), default=True)
 
-    def _redir_mention(self) -> str:
-        try:
-            cid = int(self.redirect_id or "0")
-            return f"<#{{cid}}>" if cid else "channel yang benar"
-        except Exception:
-            return "channel yang benar"
+        guards = _env_str_any("LPG_GUARD_CHANNELS", "LUCKYPULL_GUARD_CHANNELS", default="")
+        self.guard_channels = _parse_id_list(guards)
 
-    async def _classify(self, image_bytes: bytes) -> Tuple[str, float]:
-        # Negative whitelist check BEFORE Gemini to avoid FP and save budget
+        # Redirect channel: prefer LPG_, fallback LUCKYPULL_ then LPA_
+        self.redirect_channel_id = _env_int_any("LPG_REDIRECT_CHANNEL_ID", "LUCKYPULL_REDIRECT_CHANNEL_ID", "LPA_REDIRECT_CHANNEL_ID", default=0)
+
+        self.mention = _mention_enabled()
+        self.delete_on_guard = _env_bool_any(("LUCKYPULL_DELETE_ON_GUARD","1"), default=True)
+
+        # Provider execution order and timeout (ms)
+        self.provider_order = _provider_order()
+        self.timeout_ms = _env_int_any("LUCKYPULL_GEM_TIMEOUT_MS", "LPA_PROVIDER_TIMEOUT_MS", default=20000)
+
+        # Persona mode/tone
+        self.persona_mode  = os.getenv("LPG_PERSONA_MODE", "yandere")
+        self.persona_tone  = os.getenv("LPG_PERSONA_TONE", "auto")
+
+        # Load persona
+        self._persona_mode, self._persona_data, self._persona_path = None, {}, None
         try:
-            if _match_negative(image_bytes, list(self._neg_ahash), list(self._neg_dhash), list(self._neg_sha), self._neg_thr):
-                log.info("[lpg] skip by whitelist (negative hash match)")
-                return ("other", 0.0)
+            if load_persona:
+                m, d, p = load_persona()
+                if m and d:
+                    self._persona_mode, self._persona_data, self._persona_path = m, d, p
         except Exception:
             pass
-        if not self.gb.enable:
-            return ("other", 0.0)
-        try:
-            res = await self.gb.classify_lucky_pull([image_bytes], hints="guard", timeout_ms=self.timeout_ms)
-            log.debug('[lpg] classify: result=%r', res)
-            if isinstance(res, (list, tuple)) and len(res)>=2: return (str(res[0]), float(res[1]))
-            if isinstance(res, dict): return (str(res.get("label","other")), float(res.get("conf",0.0)))
-        except Exception: pass
-        return ("other", 0.0)
 
-    async def _later_delete(self, msg: discord.Message, seconds: int):
-        try:
-            await asyncio.sleep(max(1, seconds)); await msg.delete()
-        except Exception: pass
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if not self.enable:
+            log.warning("[lpg] disabled via LPG_ENABLE=0"); return
+        log.warning("[lpg] ready | guards=%s redirect=%s providers=%s timeout=%dms",
+                    list(self.guard_channels), self.redirect_channel_id, self.provider_order, self.timeout_ms)
+        if self._persona_path:
+            log.warning("[lpg] persona file: %s", self._persona_path.replace("\", "/"))
+        if classify_bytes is None:
+            log.error("[lpg] gemini_bridge missing; classification disabled")
 
-    @commands.Cog.listener("on_message")
-    async def on_message(self, message: discord.Message):
-        if not message.guild or message.author.bot: return
-        if str(message.channel.id) not in self.guard_channels: return
-        if not message.attachments: return
-        img_bytes: Optional[bytes] = None
-        for a in message.attachments:
+    def _is_guard_channel(self, channel: discord.abc.GuildChannel) -> bool:
+        try: return channel and int(channel.id) in self.guard_channels
+        except Exception: return False
+
+    def _pick_tone(self, score: float) -> str:
+        t = (self.persona_tone or "auto").lower()
+        if t in ("soft","agro","sharp"): return t
+        if score >= 0.95: return "sharp"
+        if score >= 0.85: return "agro"
+        return "soft"
+
+    async def _persona_notify(self, message: discord.Message, score: float):
+        tone = self._pick_tone(score)
+        if pick_line and self._persona_data:
+            line = pick_line(self._persona_data, self._persona_mode or self.persona_mode, tone)
+        else:
+            line = "Konten dipindahkan ke channel yang benar."
+
+        channel_mention = f"<#{self.redirect_channel_id}>" if self.redirect_channel_id else f"#{message.channel.name}"
+        user_mention = message.author.mention if self.mention else str(message.author)
+        line = (line.replace("{user}", user_mention)
+                    .replace("{user_name}", str(message.author))
+                    .replace("{channel}", channel_mention)
+                    .replace("{channel_name}", f"#{message.channel.name}"))
+
+        try:
+            await message.channel.send(line, reference=message, mention_author=self.mention)
+        except Exception:
+            await message.channel.send(line)
+
+    async def _handle_redirect(self, message: discord.Message, score: float, provider: str, reason: str, attachments):
+        if not self.redirect_channel_id: return
+        chan = message.guild.get_channel(self.redirect_channel_id) if message.guild else None
+        if not chan:
+            try: chan = await self.bot.fetch_channel(self.redirect_channel_id)
+            except Exception: chan = None
+        if not chan:
+            log.error("[lpg] redirect channel not found: %s", self.redirect_channel_id); return
+
+        files = []
+        for a in attachments:
             try:
-                if (getattr(a,"content_type",None) and str(a.content_type).startswith("image/")) or img_bytes is None:
-                    img_bytes = await a.read(); break
-            except Exception: continue
-        if not img_bytes: return
-        label, conf = await self._classify(img_bytes)
-        if label=="lucky" and conf>=self.threshold:
-            if self.delete_on_guard:
-                try:
-                    await message.delete()
-                    log.info('[lpg] deleted a message in %s (reason=lucky pull)', message.channel.id)
-                except Exception:
-                    pass
-            if self.mention_user:
-                try:
-                    mention = message.author.mention
-                    redir = self._redir_mention()
-                    note = await message.channel.send(_pick_yandere_line().format(mention=mention, redir=redir))
-                    if self.notice_ttl>0: asyncio.create_task(self._later_delete(note, self.notice_ttl))
-                except Exception: pass
+                if a.size and a.size > 0:
+                    b = await a.read()
+                    files.append(discord.File(io.BytesIO(b), filename=a.filename))
+            except Exception as e:
+                log.warning("[lpg] attach read fail: %s", e)
 
-async def setup(bot: commands.Bot):
-    await bot.add_cog(LuckyPullGuard(bot))
+        desc = "Score **{:.3f}** via `{}`\nReason: {}".format(score, provider, reason)
+        content = (message.author.mention if self.mention else None)
+        embed = discord.Embed(title="Lucky Pull terdeteksi", description=desc, color=0xFF66AA)
+        embed.add_field(name="Pengirim", value="{} ({})".format(message.author.mention if self.mention else "", message.author), inline=False)
+        embed.add_field(name="Sumber", value="#{}".format(message.channel.name), inline=True)
+        embed.set_footer(text="msg_id={}".format(message.id))
+        try:
+            await chan.send(content=content, embed=embed, files=files or None)
+        except Exception as e:
+            log.error("[lpg] redirect send failed: %s", e)
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if not self.enable or message.author.bot: return
+        if not self._is_guard_channel(getattr(message, "channel", None)): return
+        if not message.attachments: return
+
+        img_attachments = [a for a in message.attachments if (a.content_type or "").startswith("image/")]
+        if not img_attachments: return
+        first = img_attachments[0]
+        try: img_bytes = await first.read()
+        except Exception: return
+
+        ok, score, provider, reason = (False, 0.0, "none", "bridge_unavailable")
+        if classify_bytes is not None:
+            try:
+                ok, score, provider, reason = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: classify_bytes(img_bytes, timeout_ms=self.timeout_ms, providers=self.provider_order)
+                )
+            except Exception as e:
+                log.error("[lpg] classify error: %s", e)
+
+        # Check threshold per provider
+        passed = False
+        if ok:
+            thr = _provider_threshold(provider)
+            passed = (score >= thr)
+        log.warning("[lpg] chan=%s user=%s score=%.3f thr=%.3f provider=%s pass=%s reason=%s",
+                    message.channel.id, message.author, score, _provider_threshold(provider), provider, passed, reason)
+
+        if not passed:
+            return
+
+        # Action: always redirect, optionally delete original (per env)
+        await self._persona_notify(message, score)
+        await self._handle_redirect(message, score, provider, reason, img_attachments)
+
+        if self.delete_on_guard:
+            try: await message.delete(delay=0)
+            except Exception as e: log.error("[lpg] delete failed: %s", e)
+
+    @commands.group(name="lpg", invoke_without_command=True)
+    @commands.has_permissions(manage_messages=True)
+    async def lpg(self, ctx: commands.Context):
+        await ctx.send("Subcommands: `!lpg config`, `!lpg test-persona [soft|agro|sharp]`, `!lpg test-redirect [#chan|id]`")
+
+    @lpg.command(name="config")
+    @commands.has_permissions(manage_messages=True)
+    async def lpg_config(self, ctx: commands.Context):
+        e = discord.Embed(title="LPG Config", color=0x99CCFF)
+        e.add_field(name="Enabled", value=str(self.enable))
+        e.add_field(name="Guard Channels", value=", ".join(map(str, self.guard_channels)) or "-", inline=False)
+        e.add_field(name="Redirect", value=str(self.redirect_channel_id))
+        e.add_field(name="Mention", value=str(self.mention))
+        e.add_field(name="DeleteOnGuard", value=str(self.delete_on_guard))
+        e.add_field(name="Providers", value=", ".join(self.provider_order))
+        e.add_field(name="Timeout(ms)", value=str(self.timeout_ms))
+        e.add_field(name="Persona", value="{}/{} @ {}".format(self._persona_mode or self.persona_mode, self.persona_tone, (self._persona_path or "-").replace("\","/")))
+        await ctx.send(embed=e)
+
+    @lpg.command(name="test-persona")
+    @commands.has_permissions(manage_messages=True)
+    async def lpg_test_persona(self, ctx: commands.Context, tone: Optional[str] = None):
+        t = (tone or self.persona_tone or "soft")
+        fake_score = 0.96 if t=="sharp" else (0.90 if t=="agro" else 0.78)
+        if pick_line and self._persona_data:
+            line = pick_line(self._persona_data, self._persona_mode or self.persona_mode, self._pick_tone(fake_score))
+        else:
+            line = "Persona default."
+        channel_mention = f"<#{self.redirect_channel_id}>" if self.redirect_channel_id else f"#{ctx.channel.name}"
+        user_mention = ctx.author.mention if self.mention else str(ctx.author)
+        line = (line.replace("{user}", user_mention)
+                    .replace("{user_name}", str(ctx.author))
+                    .replace("{channel}", channel_mention)
+                    .replace("{channel_name}", f"#{ctx.channel.name}"))
+        await ctx.send(line)
+
+    @lpg.command(name="test-redirect")
+    @commands.has_permissions(manage_messages=True)
+    async def lpg_test_redirect(self, ctx: commands.Context, target: Optional[str] = None):
+        chan_id = self.redirect_channel_id
+        if target:
+            if target.isdigit():
+                chan_id = int(target)
+            elif ctx.message.channel_mentions:
+                chan_id = ctx.message.channel_mentions[0].id
+        ch = ctx.guild.get_channel(chan_id) if ctx.guild else None
+        if not ch:
+            try: ch = await self.bot.fetch_channel(chan_id)
+            except Exception: ch = None
+        if not ch:
+            await ctx.send("Gagal: channel {} tidak ditemukan.".format(chan_id)); return
+        embed = discord.Embed(title="Test Redirect OK", description="Tes dari !lpg test-redirect", color=0x66FFCC)
+        await ch.send(embed=embed, content=(ctx.author.mention if self.mention else None))
+        await ctx.send("Sent to <#{}>".format(chan_id))
+
+def setup(bot: commands.Bot):
+    if _env_str_any("LPG_COG_ENABLE", default="1") in ("0","false","no"):
+        return
+    bot.add_cog(LuckyPullGuard(bot))

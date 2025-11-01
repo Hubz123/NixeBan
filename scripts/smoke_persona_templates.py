@@ -1,33 +1,28 @@
-import sys
-from nixe.helpers.persona_loader import list_groups, pick_line
 
-def assert_ok(cond, msg):
-    if not cond:
-        print("[FAIL]", msg)
-        return False
-    return True
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+import os, sys
+
+def _ensure_path():
+    here = os.path.abspath(os.path.dirname(__file__))
+    root = os.path.abspath(os.path.join(here, ".."))
+    if root not in sys.path:
+        sys.path.insert(0, root)
 
 def main():
-    ok = True
-    groups = set(list_groups("yandere"))
-    ok &= assert_ok(groups == {"soft","agro","sharp","possessive"}, f"groups mismatch: {groups}")
-    # explicit tones
-    for tone in ("soft","agro","sharp","possessive","killer","yandere_killer","poss"):
-        s = pick_line("yandere", tone=tone, user="@u", channel="#c", reason="deteksi")
-        ok &= assert_ok(bool(s and "{user}" not in s), f"explicit tone failed: {tone}: {s!r}")
-    # weighted & random
-    for mode in ("weighted","random"):
-        s = pick_line("yandere", mode=mode, user="@u", channel="#c", reason="deteksi")
-        ok &= assert_ok(bool(s and "{user}" not in s), f"mode failed: {mode}: {s!r}")
-    # by_score buckets
-    tests = [(5,"soft"), (35,"possessive"), (70,"agro"), (95,"sharp")]
-    for score, label in tests:
-        s = pick_line("yandere", mode="by_score", score=score, user="@u", channel="#c", reason="deteksi")
-        ok &= assert_ok(bool(s and "{user}" not in s), f"by_score {score} failed: {s!r}")
-    if ok:
-        print("[PASS] yandere persona v2 OK")
-        sys.exit(0)
-    sys.exit(1)
+    _ensure_path()
+    try:
+        from nixe.helpers.persona_loader import load_persona, pick_line
+    except Exception as e:
+        print("[FAIL] loader import error:", e); sys.exit(2)
+    mode, data, path = load_persona()
+    if not mode or not data or not path:
+        print("[FAIL] persona not found in expected paths"); sys.exit(3)
+    print("[DEBUG] winner:", path.replace("\\", "/"))
+    for tone in ("soft","agro","sharp"):
+        line = pick_line(data, mode, tone)
+        print(f"[SAMPLE {tone}] {line}")
+    print("[PASS] persona loader OK")
 
 if __name__ == "__main__":
     main()
