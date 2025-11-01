@@ -92,7 +92,7 @@ def _groq_classify(jpeg_b64_url: str, threshold: float, timeout: float) -> Tuple
         raise RuntimeError("GROQ_API_KEY missing")
     client = Groq(api_key=api)
     models = [
-        (os.environ.get("GROQ_MODEL") or os.environ.get("LPG_GROQ_MODEL") or "llama-3.1-8b-instant"),
+        os.environ.get("LPG_GROQ_MODEL","meta-llama/llama-4-scout-17b-16e-instruct"),
         "meta-llama/llama-4-maverick-17b-128e-instruct",
     ]
     prompt = "Classify this image as a gacha 'lucky pull' reveal or not. Reply ONLY JSON: {\"is_lucky\":true|false,\"confidence\":0..1,\"reason\":\"...\"}."

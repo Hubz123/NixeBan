@@ -1,7 +1,7 @@
 # nixe/cogs/a00a_whitelist_thread_singleton_overlay.py
+# Collapse duplicate "Whitelist LPG (FP)" threads; reuse one and archive duplicates.
 import os, asyncio, logging, discord
 from discord.ext import commands
-
 _log = logging.getLogger(__name__)
 
 def _getenv(k, d=""):

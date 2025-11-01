@@ -1,4 +1,5 @@
 # nixe/cogs/a00_redirect_exempt_overlay.py
+# Ensure Lucky Pull redirect channel(s) are never treated as guard/phish targets.
 import os
 from discord.ext import commands
 
@@ -28,15 +29,16 @@ class RedirectExemptOverlay(commands.Cog):
         self.redirect_ids = sorted({*cand})
         if not self.redirect_ids:
             return
+        # Exempt redirect channel(s) from scans/guards
         _merge_list_env("SUS_ATTACH_IGNORE_CHANNELS", self.redirect_ids)
         _merge_list_env("PHASH_MATCH_SKIP_CHANNELS", self.redirect_ids)
         _merge_list_env("FIRST_TOUCHDOWN_BYPASS_CHANNELS", self.redirect_ids)
+        # Ensure redirect not in guard lists
         for key in ("FIRST_TOUCHDOWN_CHANNELS","CRYPTO_CASINO_GUARD_CHANNELS",
                     "LPA_GUARD_CHANNELS","LPG_GUARD_CHANNELS","LUCKYPULL_GUARD_CHANNELS"):
             _remove_from_list_env(key, self.redirect_ids)
 
 async def setup(bot: commands.Bot):
-    # add_cog is async in newer discord.py; sync in older.
     add = getattr(bot, "add_cog")
     res = add(RedirectExemptOverlay(bot))
     import inspect

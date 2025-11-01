@@ -1,7 +1,6 @@
 # nixe/cogs/a00zz_force_lpa_logs_overlay.py
 import logging, asyncio, inspect
 from discord.ext import commands
-
 TARGET_LOGGERS = ["nixe.cogs.lucky_pull_auto", "nixe.cogs.luckypull_guard"]
 
 def _ensure():
