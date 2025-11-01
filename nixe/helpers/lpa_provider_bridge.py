@@ -1,6 +1,16 @@
 # nixe/helpers/lpa_provider_bridge.py — image-first provider dispatch; no ENV change
 import os, importlib
 
+# --- Groq model sanitizer (prevents hardcoded maverick/scout) ---
+try:
+    _gm = (os.getenv("GROQ_MODEL") or os.getenv("LPG_GROQ_MODEL") or "").strip()
+    if (not _gm) or ("maverick" in _gm.lower()) or ("scout" in _gm.lower()) or (_gm.lower() in {"auto","default"}):
+        os.environ["GROQ_MODEL"] = os.environ.get("LPG_GROQ_FALLBACK","llama-3.1-8b-instant")
+except Exception:
+    pass
+# ---------------------------------------------------------------
+
+
 def _try_import(path: str):
     try: return importlib.import_module(path)
     except Exception: return None

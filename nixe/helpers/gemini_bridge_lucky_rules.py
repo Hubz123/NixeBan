@@ -10,7 +10,7 @@ import os
 def _lazy_client():
     try:
         import google.generativeai as genai
-        key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        key = os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
         if not key:
             return None, "no_key"
         genai.configure(api_key=key)

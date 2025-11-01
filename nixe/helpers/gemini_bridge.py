@@ -1,167 +1,136 @@
 
-import os, time, base64, json
+# -*- coding: utf-8 -*-
 from typing import Tuple
+import os, json, base64, urllib.request, urllib.error
 
-# --- Embedded GOOD data URL (16x16 JPEG) for smoke fallback ---
-_SMOKE_GOOD_DATA_URL = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAAQABADASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAn/xAAaEAAABwAAAAAAAAAAAAAAAAAyNXJ1srTj/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AKgEbbWzgkA8bbOc0jHjbZzmkYjba2cEgD//2Q=="
+def _detect_mime(b: bytes) -> str:
+    """Detect basic image mime from header bytes."""
+    if b.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if b.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if b.startswith(b"RIFF") and b[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/jpeg"
 
-def _b64_of(data: bytes) -> str:
-    return base64.b64encode(data).decode("ascii")
+def _image_provider_order():
+    order = os.environ.get("LPG_IMAGE_PROVIDER_ORDER") or os.environ.get("LPG_PROVIDER_ORDER") or "gemini,groq"
+    items = [x.strip().lower() for x in order.split(",") if x.strip()]
+    return items or ["gemini"]
 
-def _to_data_url_jpeg(jpeg_bytes: bytes) -> str:
-    # minimal validation: must start with ffd8 and end with ffd9
-    if not (jpeg_bytes[:2] == b"\xff\xd8" and jpeg_bytes[-2:] == b"\xff\xd9"):
-        raise ValueError("invalid_jpeg_bytes")
-    return "data:image/jpeg;base64," + _b64_of(jpeg_bytes)
-
-def _cooldown_path() -> str:
-    return os.path.join(os.path.dirname(__file__), "..", "tmp_gemini_429.lock")
-
-def _gemini_on_cooldown() -> bool:
+def _extract_json_like(txt: str) -> dict:
     try:
-        cd = float(os.environ.get("LPG_GEM_429_COOLDOWN_SEC","600"))
-    except Exception:
-        cd = 600.0
-    p = _cooldown_path()
-    try:
-        st = os.stat(p)
-        return (time.time() - st.st_mtime) < cd
-    except FileNotFoundError:
-        return False
-
-def _mark_gemini_429():
-    p = _cooldown_path()
-    try:
-        with open(p,"w") as f:
-            f.write(str(time.time()))
+        return json.loads(txt)
     except Exception:
         pass
+    s = txt
+    start = s.find("{")
+    if start == -1:
+        return {}
+    depth = 0
+    for i in range(start, len(s)):
+        ch = s[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                block = s[start:i+1]
+                try:
+                    return json.loads(block)
+                except Exception:
+                    break
+    return {}
 
-def _gemini_classify(jpeg_b64_url: str, threshold: float, timeout: float) -> Tuple[bool, float, str]:
-    import google.generativeai as genai
+def _gemini_call(img_bytes: bytes, model: str, timeout: float):
     api = os.environ.get("GEMINI_API_KEY")
     if not api:
-        raise RuntimeError("GEMINI_API_KEY missing")
-    if _gemini_on_cooldown():
-        raise RuntimeError("gemini_on_cooldown")
-    genai.configure(api_key=api)
-    model = os.environ.get("GEMINI_MODEL","gemini-2.5-flash")
-    prompt = "Klasifikasi: apakah ini screenshot 'gacha lucky pull'? Balas JSON: {\"is_lucky\":bool,\"confidence\":0..1,\"reason\":str}"
-    try:
-        try:
-            from google import genai as google_genai  # new client
-            client = google_genai.Client(api_key=api)
-            resp = client.models.generate_content(
-                model=model,
-                contents=[
-                    {"role":"user","parts":[
-                        {"text": prompt},
-                        {"inline_data": {"mime_type": "image/jpeg", "data": jpeg_b64_url.split(",",1)[1] }}
-                    ]}
-                ],
-                config={"response_mime_type":"application/json"}
-            )
-            text = resp.text or ""
-        except Exception:
-            img_part = {"mime_type":"image/jpeg","data": jpeg_b64_url.split(",",1)[1]}
-            resp = genai.GenerativeModel(model).generate_content(
-                [prompt, img_part],
-                request_options={"timeout": timeout},
-                generation_config={"response_mime_type":"application/json"}
-            )
-            text = getattr(resp, "text", "") or ""
-    except Exception as e:
-        msg = str(e)
-        if "429" in msg or "quota" in msg.lower():
-            _mark_gemini_429()
-        raise
+        return (False, 0.0, "gemini:"+model, "GEMINI_API_KEY missing")
+    url = "https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={k}".format(
+        m=model, k=api
+    )
 
+    prompt = (
+        "Return ONLY a JSON object with EXACT keys: "
+        "{"
+        "\"is_lucky\": true or false, "
+        "\"confidence\": number between 0 and 1, "
+        "\"reason\": string"
+        "}. "
+        "Classify whether the image is a gacha 'lucky pull' reveal (celebration/obtained screen)."
+    )
+
+    mime = _detect_mime(img_bytes)
+    payload = {
+        "generationConfig": {"response_mime_type": "application/json"},
+        "contents":[{
+            "role":"user",
+            "parts":[
+                {"inlineData": {"mimeType": mime, "data": base64.b64encode(bytes(img_bytes)).decode("ascii")}},
+                {"text": prompt}
+            ]
+        }]
+    }
+
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type":"application/json"}
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=float(timeout)) as resp:
+            code = resp.getcode()
+            text = resp.read().decode("utf-8", errors="ignore")
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "ignore")
+        return False, 0.0, "gemini:"+model, "gemini_http_{c}: {b}".format(c=e.code, b=body[:200])
+    except Exception as e:
+        return False, 0.0, "gemini:"+model, str(e)
+
+    if code != 200:
+        return False, 0.0, "gemini:"+model, "gemini_http_{c}: {b}".format(c=code, b=text[:200])
+
+    # Prefer JSON-only; fallback to text extraction
     try:
         data = json.loads(text)
-        conf = float(data.get("confidence", 0.0))
-        ok = bool(data.get("is_lucky", False)) and conf >= float(threshold)
-        reason = data.get("reason","")
-        return ok, conf, "gemini:" + model
     except Exception:
-        return False, 0.0, "gemini_invalid_json"
+        data = {"text": text}
 
-def _groq_classify(jpeg_b64_url: str, threshold: float, timeout: float) -> Tuple[bool, float, str]:
-    from groq import Groq
-    api = os.environ.get("GROQ_API_KEY")
-    if not api:
-        raise RuntimeError("GROQ_API_KEY missing")
-    client = Groq(api_key=api)
-    models = [
-        (os.environ.get("GROQ_MODEL") or os.environ.get("LPG_GROQ_MODEL") or "llama-3.1-8b-instant"),
-        "meta-llama/llama-4-maverick-17b-128e-instruct",
-    ]
-    prompt = "Classify this image as a gacha 'lucky pull' reveal or not. Reply ONLY JSON: {\"is_lucky\":true|false,\"confidence\":0..1,\"reason\":\"...\"}."
-    errors = []
-    for m in models:
-        try:
-            msg = [
-                {"role":"user","content":[
-                    {"type":"text","text": prompt},
-                    {"type":"image_url","image_url":{"url": jpeg_b64_url}}
-                ]}
-            ]
-            r = client.chat.completions.create(model=m, messages=msg, temperature=0)
-            content = r.choices[0].message.content
-            data = json.loads(content)
-            conf = float(data.get("confidence", 0.0))
-            ok = bool(data.get("is_lucky", False)) and conf >= float(threshold)
-            reason = data.get("reason","")
-            return ok, conf, "groq:" + m
-        except Exception as e:
-            errors.append(f"groq({m}): {e}")
-            if "invalid image data" in str(e).lower() and os.environ.get("LPG_SMOKE_ALLOW_FALLBACK","1")=="1":
-                try:
-                    msg = [
-                        {"role":"user","content":[
-                            {"type":"text","text": prompt},
-                            {"type":"image_url","image_url":{"url": _SMOKE_GOOD_DATA_URL}}
-                        ]}
-                    ]
-                    r = client.chat.completions.create(model=m, messages=msg, temperature=0)
-                    content = r.choices[0].message.content
-                    data = json.loads(content)
-                    conf = float(data.get("confidence", 0.0))
-                    ok = bool(data.get("is_lucky", False)) and conf >= float(threshold)
-                    reason = data.get("reason","")
-                    return ok, conf, "groq:" + m
-                except Exception as e2:
-                    errors.append(f"groq_fallback({m}): {e2}")
-            continue
-    raise RuntimeError(" | ".join(errors))
-
-def classify_lucky_pull_bytes(img_bytes: bytes, threshold: float = 0.75, timeout: float = 12.0):
-    """Return (ok, confidence, provider, reason)."""
-    if os.environ.get("LPG_SMOKE_FORCE_SAMPLE","1")=="1":
-        jpeg_b64_url = _SMOKE_GOOD_DATA_URL
+    if isinstance(data, dict) and "candidates" in data:
+        parts = (data.get("candidates") or [{}])[0].get("content", {}).get("parts", [])
+        txt = ""
+        for p in parts:
+            if "text" in p:
+                txt = p["text"]
+                break
+        obj = _extract_json_like(txt)
     else:
-        try:
-            jpeg_b64_url = _to_data_url_jpeg(img_bytes)
-        except Exception:
-            jpeg_b64_url = _SMOKE_GOOD_DATA_URL
+        obj = data if isinstance(data, dict) else {}
 
-    providers = os.environ.get("LPG_PROVIDER_ORDER","gemini,groq").split(",")
-    last_reason = ""
-    for p in providers:
-        p = p.strip().lower()
+    conf_raw = obj.get("confidence", 0.0)
+    conf = float(conf_raw) if isinstance(conf_raw, (int, float)) else 0.0
+    ok = bool(obj.get("is_lucky", False))
+    reason = obj.get("reason", "ok" if ok else "not_lucky")
+    return ok, conf, "gemini:"+model, reason
+
+def classify_lucky_pull_bytes(img_bytes: bytes, threshold: float = 0.75, timeout: float = 20000.0, *args, **kwargs):
+    last_provider, last_score, last_reason = "none", 0.0, ""
+    order = _image_provider_order()
+    model_gem = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
+
+    for p in order:
         try:
             if p == "gemini":
-                if _gemini_on_cooldown():
-                    last_reason = "gemini_on_cooldown"
-                    continue
-                ok, conf, reason = _gemini_classify(jpeg_b64_url, threshold, timeout)
-                if ok or conf > 0:
-                    return ok, conf, "gemini", reason
+                ok, score, prov, reason = _gemini_call(img_bytes, model_gem, timeout)
+                last_provider, last_score, last_reason = prov, float(score), reason
+                if ok and score >= float(threshold):
+                    return True, float(score), prov, reason
             elif p == "groq":
-                ok, conf, reason = _groq_classify(jpeg_b64_url, threshold, timeout)
-                if ok or conf > 0:
-                    return ok, conf, "groq", reason
+                # groq vision path intentionally not implemented in this bridge
+                last_provider, last_reason = "groq", "groq_vision_path_not_implemented"
         except Exception as e:
-            last_reason = str(e)[:200]
+            last_reason = str(e)
+            continue
 
-    fail_close = os.environ.get("LPG_FAIL_CLOSE","0") == "1"
-    return (True, 0.0, "none", "fail_close") if fail_close else (False, 0.0, "none", "all providers failed; last_reason=" + last_reason)
+    return False, float(last_score), last_provider, last_reason
