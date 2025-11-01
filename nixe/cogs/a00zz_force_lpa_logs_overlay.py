@@ -1,11 +1,8 @@
 # nixe/cogs/a00zz_force_lpa_logs_overlay.py
-import logging, asyncio
+import logging, asyncio, inspect
 from discord.ext import commands
 
-TARGET_LOGGERS = [
-    "nixe.cogs.lucky_pull_auto",
-    "nixe.cogs.luckypull_guard",
-]
+TARGET_LOGGERS = ["nixe.cogs.lucky_pull_auto", "nixe.cogs.luckypull_guard"]
 
 def _ensure():
     root = logging.getLogger()
@@ -33,4 +30,7 @@ class LPAForceLogsOverlay2(commands.Cog):
         logging.getLogger("nixe.cogs.lucky_pull_auto").info("[lpa-log] re-assert INFO after ready")
 
 async def setup(bot):
-    await bot.add_cog(LPAForceLogsOverlay2(bot))
+    add = getattr(bot, "add_cog")
+    res = add(LPAForceLogsOverlay2(bot))
+    if inspect.isawaitable(res):
+        await res
