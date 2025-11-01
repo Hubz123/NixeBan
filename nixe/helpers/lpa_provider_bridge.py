@@ -1,70 +1,60 @@
-# nixe/helpers/lpa_provider_bridge.py
-"""
-Lightweight provider bridge for Lucky Pull classification.
+# nixe/helpers/lpa_provider_bridge.py — image-first provider dispatch; no ENV change
+import os, importlib
 
-This module tries (in order) the providers specified by env LPA_PROVIDER_ORDER (e.g. "groq,gemini").
-It looks for optional modules you may already have:
- - nixe.helpers.lpg_provider          -> expected function: classify_lucky_pull(text) -> (score[0..1], reason)
- - nixe.helpers.gemini_bridge         -> expected function: classify_lucky_pull(text) -> (score, reason)
- - nixe.helpers.groq_bridge           -> expected function: classify_lucky_pull(text) -> (score, reason)
+def _try_import(path: str):
+    try: return importlib.import_module(path)
+    except Exception: return None
 
-If a provider module isn't present, it's skipped.
-This module NEVER raises; it returns (None, "provider_unavailable") on failure.
-"""
-import os, time
-
-def _getenv(k, d=""):
-    return os.getenv(k, d)
-
-def _try_import(path):
+def _call_tuple(fn, *args, **kw):
     try:
-        mod = __import__(path, fromlist=["*"])
-        return mod
-    except Exception as e:
-        return None
-
-def _call(mod, text, timeout_ms):
-    try:
-        fn = getattr(mod, "classify_lucky_pull", None)
-        if not callable(fn):
-            return None, "no_fn"
-        # naive timeout guard by start timestamp (actual network timeouts must be inside module)
-        start = time.time()
-        res = fn(text)
-        if timeout_ms:
-            elapsed = (time.time() - start) * 1000.0
-            if elapsed > timeout_ms:
-                return None, "timeout_soft"
-        return res
+        res = fn(*args, **kw)
     except Exception as e:
         return None, f"err:{type(e).__name__}"
+    if not isinstance(res, tuple) or len(res) < 2:
+        return None, "bad_tuple"
+    a0, a1 = res[0], res[1]
+    if isinstance(a0, (int,float)) and 0.0 <= float(a0) <= 1.0:
+        return float(a0), "ok"
+    if isinstance(a0, bool) and isinstance(a1, (int,float)):
+        ok, conf = bool(a0), float(a1)
+        return (conf if ok else 0.0), "ok"
+    return None, "unknown_shape"
 
-def classify(text: str, provider_order: str = ""):
-    order = [p.strip() for p in (provider_order or _getenv("LPA_PROVIDER_ORDER","groq,gemini")).split(",") if p.strip()]
-    timeout_ms = int(_getenv("LPA_PROVIDER_TIMEOUT_MS", "9000") or 9000)
-
-    modules = []
+def _iter(order_csv: str):
+    order = [p.strip().lower() for p in (order_csv or "gemini,groq").split(",") if p.strip()]
     for p in order:
-        if p.lower() == "groq":
-            m = _try_import("nixe.helpers.groq_bridge") or _try_import("nixe.helpers.lpg_provider")
-        elif p.lower() == "gemini":
-            m = _try_import("nixe.helpers.gemini_bridge") or _try_import("nixe.helpers.lpg_provider")
+        if p == "gemini":
+            yield p, (_try_import("nixe.helpers.gemini_bridge_lucky_rules")
+                      or _try_import("nixe.helpers.gemini_bridge")
+                      or _try_import("nixe.helpers.lpg_provider"))
+        elif p == "groq":
+            yield p, (_try_import("nixe.helpers.groq_bridge")
+                      or _try_import("nixe.helpers.lpg_provider"))
         else:
-            m = _try_import(p)  # allow custom paths
-        if m:
-            modules.append((p.lower(), m))
+            yield p, _try_import(p)
 
-    if not modules:
-        return None, "provider_unavailable"
+def classify_with_image_bytes(img_bytes: bytes, order: str = ""):
+    try: os.environ.setdefault("LPG_SMOKE_FORCE_SAMPLE","0")
+    except Exception: pass
+    last = "provider_unavailable"
+    for name, mod in _iter(order):
+        if not mod: continue
+        for fn_name in ("classify_lucky_pull_bytes","classify_image_bytes"):
+            fn = getattr(mod, fn_name, None)
+            if not fn: continue
+            score, status = _call_tuple(fn, img_bytes)
+            if isinstance(score, float): return score, f"{name}:{fn_name}"
+            last = f"{name}:{status}"; break
+    return None, last
 
-    last_reason = "provider_unavailable"
-    for name, mod in modules:
-        score_reason = _call(mod, text, timeout_ms)
-        if not isinstance(score_reason, tuple) or len(score_reason) != 2:
-            last_reason = "bad_tuple"
-            continue
-        score, reason = score_reason
-        if isinstance(score, (int, float)):
-            return float(score), f"{name}:{reason}"
-        last_reason = f"{name}:{reason}"
-    return None, last_reason
+def classify(text: str, order: str = ""):
+    last = "provider_unavailable"
+    for name, mod in _iter(order):
+        if not mod: continue
+        for fn_name in ("classify_lucky_pull","classify_lucky_pull_text"):
+            fn = getattr(mod, fn_name, None)
+            if not fn: continue
+            score, status = _call_tuple(fn, text)
+            if isinstance(score, float): return score, f"{name}:{fn_name}"
+            last = f"{name}:{status}"; break
+    return None, last

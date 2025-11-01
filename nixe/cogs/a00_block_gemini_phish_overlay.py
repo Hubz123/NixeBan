@@ -1,21 +1,33 @@
-# -*- coding: utf-8 -*-
-import os, logging
+# nixe/cogs/a00_block_gemini_phish_overlay.py
+# Drop-in fix: correctly await unload_extension (supports async or sync), silent.
+import inspect
 from discord.ext import commands
-log = logging.getLogger("nixe.cogs.a00_block_gemini_phish_overlay")
+
+TARGET_EXT = "nixe.cogs.image_phish_gemini_guard"
+
 class BlockGeminiPhishOverlay(commands.Cog):
-    def __init__(self, bot):
+    def __init__(self, bot: commands.Bot):
         self.bot = bot
-        os.environ.setdefault("PHISH_GEMINI_ENABLE", "0")
-        os.environ.setdefault("IMAGE_PHISH_GEMINI_ENABLE", "0")
-        os.environ.setdefault("SUS_ATTACH_USE_GEMINI", "0")
-        os.environ.setdefault("SUS_ATTACH_ALWAYS_GEM", "0")
-        os.environ.setdefault("SUS_ATTACH_GEMINI_THRESHOLD", "9.99")
+
+    async def _safe_unload(self, name: str):
+        try:
+            # Skip if not loaded
+            if name not in getattr(self.bot, "extensions", {}):
+                return
+            fn = getattr(self.bot, "unload_extension", None)
+            if not fn:
+                return
+            # Call and await if needed (covers async/sync implementations)
+            result = fn(name)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            # stay silent
+            pass
+
     @commands.Cog.listener()
     async def on_ready(self):
-        try:
-            self.bot.unload_extension("nixe.cogs.image_phish_gemini_guard")
-            log.warning("[gemini-phish:block] unloaded extension: nixe.cogs.image_phish_gemini_guard")
-        except Exception as e:
-            log.info("[gemini-phish:block] guard not loaded or already removed: %r", e)
-async def setup(bot):
+        await self._safe_unload(TARGET_EXT)
+
+async def setup(bot: commands.Bot):
     await bot.add_cog(BlockGeminiPhishOverlay(bot))
